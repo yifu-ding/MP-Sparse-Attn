@@ -112,7 +112,8 @@ def main():
         
     # finetune the model with sparse attention, store the state_dict
     if args.sparse_attention:
-        model_out_path = os.path.join(args.model_out_path, f"{args.model}_l1_{args.l1}_pv_l1_{args.pv_l1}-5shots.pt")
+        # model_out_path = os.path.join(args.model_out_path, f"{args.model}_l1_{args.l1}_pv_l1_{args.pv_l1}-{args.num_fewshots}shots.pt")
+        model_out_path = args.model_out_path    
         
         if args.tune:
             os.environ["TUNE_MODE"] = "1"  # enable tune mode

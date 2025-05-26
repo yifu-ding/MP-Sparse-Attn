@@ -22,6 +22,7 @@ from tqdm import tqdm
 import numpy as np
 from spas_sage_attn.utils import precision_metric
 from spas_sage_attn import spas_sage_attn_meansim_cuda, spas_sage2_attn_meansim_cuda
+from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim
 import warnings
 from einops import rearrange
 
@@ -142,7 +143,8 @@ class SparseAttentionMeansim(nn.Module):
             return spas_sage2_attn_meansim_cuda
         else:
             # warnings.warn(f'{sm=}, do not support sageattn2, using sageattn1 kernel')
-            return spas_sage_attn_meansim_cuda
+            # return spas_sage_attn_meansim_cuda
+            return spas_sage_attn_meansim   # triton kernel 
 
     @torch.no_grad()
     def tune_pvthreshd(self, qi, ki, vi, mask=None, is_causal=False, smooth_k=True, simthreshd1=None, cdfthreshd=None):
@@ -341,6 +343,7 @@ class SparseAttentionMeansim(nn.Module):
             torch.cuda.empty_cache()
         else:
             assert self.cdfthreshd is not None, "attention hyperparameters should be tuned first"
+
             kernel = self.kernel_selection()
             o = kernel(
                 q,

@@ -41,7 +41,7 @@ def spas_sage_attn_meansim(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=Fal
 
     assert headdim in [64, 128], "headdim should be in [64, 96, 128]."
 
-    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k)
+    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k)  # 量化
     pvthreshd = hyperparameter_check(pvthreshd, q.size(-3), q.device)
     # k_block_indices[:] = 1
     o = forward(q_int8, k_int8, k_block_indices, v, q_scale, k_scale, pvthreshd, is_causal=is_causal, tensor_layout="HND", output_dtype=dtype)

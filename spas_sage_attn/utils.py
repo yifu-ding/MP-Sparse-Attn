@@ -234,30 +234,30 @@ def get_block_map_meansim(q, k, is_causal=False, BLKQ=128, BLKK=64, simthreshd1=
     cdfthreshd = hyperparameter_check(cdfthreshd, Headnum, q.device)
     nq = (q.shape[-2] + BLKQ - 1) // BLKQ
     nk = (k.shape[-2] + BLKK - 1) // BLKK
-    pooled_qblocks, sim_qblocks = get_pool_sim_triton_simmean(q, BLKQ, simthreshd1)
-    pooled_kblocks, sim_kblocks = get_pool_sim_triton_simmean(k, BLKK, simthreshd1)
+    pooled_qblocks, sim_qblocks = get_pool_sim_triton_simmean(q, BLKQ, simthreshd1)  # 块级相似度计算
+    pooled_kblocks, sim_kblocks = get_pool_sim_triton_simmean(k, BLKK, simthreshd1)  # 块级相似度计算
 
-    sim_kblocks = sim_kblocks.unsqueeze(-2).expand(-1, -1, nq, -1)  # faster than repeat
+    sim_kblocks = sim_kblocks.unsqueeze(-2).expand(-1, -1, nq, -1)  # faster than repeat，对相似度进行扩展以匹配维度
     sim_qblocks = sim_qblocks.unsqueeze(-1).expand(-1, -1, -1, nk)
-    pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2) * q.shape[-1] ** -0.5
-    pooled_score[~sim_kblocks] = -torch.inf
+    pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2) * q.shape[-1] ** -0.5  # 计算池化分数
+    pooled_score[~sim_kblocks] = -torch.inf  # 将不相似的块设置为负无穷
     if is_causal:
         nq = pooled_qblocks.shape[-2]
         nk = pooled_kblocks.shape[-2]
         empty_mask = torch.empty(nq, nk, device=q.device, dtype=torch.bool)
         causal_mask = fill_causal_mask_triton(empty_mask, BLKQ / BLKK)
         pooled_score = pooled_score.masked_fill(~causal_mask[None, None, ...], -torch.inf)
-    pooled_score = pooled_score.softmax(-1)
-    sorted_score = torch.sort(pooled_score, dim=-1, descending=True)
-    cdf = torch.cumsum(sorted_score.values, dim=-1)
+    pooled_score = pooled_score.softmax(-1)  # 对池化分数进行softmax归一化
+    sorted_score = torch.sort(pooled_score, dim=-1, descending=True)  # 对池化分数进行排序，降序
+    cdf = torch.cumsum(sorted_score.values, dim=-1)  # 计算累积分布函数
     B, H, Q, K = cdf.shape
     cdfthreshd_ts = cdfthreshd.view(1, H, 1, 1)
     cdfthreshd_ts = cdfthreshd_ts.expand(B, -1, Q, 1).contiguous()
-    num_to_select = torch.searchsorted(cdf, cdfthreshd_ts, right=True).squeeze(-1)
+    num_to_select = torch.searchsorted(cdf, cdfthreshd_ts, right=True).squeeze(-1)  # 根据CDF阈值选择要保留的块数量
     final_map = torch.zeros_like(pooled_score, dtype=torch.bool)
-    final_map[~sim_kblocks] = 1
-    final_map[~sim_qblocks] = 1
-    final_map = fill_block_map_triton(final_map, num_to_select, sorted_score.indices)
+    final_map[~sim_kblocks] = 1  # 将不相似的块设置为1
+    final_map[~sim_qblocks] = 1  # 将不相似的块设置为1
+    final_map = fill_block_map_triton(final_map, num_to_select, sorted_score.indices)  # 创建最终映射矩阵，填充块映射
     if is_causal:
         final_map = final_map * causal_mask[None, None, ...]
 
@@ -267,7 +267,7 @@ def get_block_map_meansim(q, k, is_causal=False, BLKQ=128, BLKK=64, simthreshd1=
     if not return_lut:
         return final_map
     else:
-        lut, valid_block_num = block_map_lut_triton(final_map)
+        lut, valid_block_num = block_map_lut_triton(final_map)  # 返回查找表和有效块数量
         return lut, valid_block_num
 
 def get_block_map_meansim_fuse_quant(q, k, km=None, is_causal=False, BLKQ=128, BLKK=64, simthreshd1=0.1, cdfthreshd=0.9, is_sparse=True, return_lut=False, attention_sink=False):

@@ -91,7 +91,7 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
                 attn_output = self.o_proj(attn_output)
-                import pdb; pdb.set_trace()  # no?
+                # import pdb; pdb.set_trace()  # no?
             else:
                 key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
