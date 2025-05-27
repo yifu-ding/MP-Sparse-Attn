@@ -49,7 +49,6 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
             key_states = key_states.view(bsz, q_len, self.config.num_key_value_heads, self.head_dim).transpose(1, 2)
             value_states = value_states.view(bsz, q_len, self.config.num_key_value_heads, self.head_dim).transpose(1, 2)
             
-
             if position_embeddings is None:
                 cos, sin = self.rotary_emb(value_states, position_ids)
             else:
@@ -95,6 +94,26 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
             else:
                 key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
+                
+                # # 创建保存目录
+                # import os
+                # save_dir = "./results/saved_qkv"
+                # os.makedirs(save_dir, exist_ok=True)
+
+                # # 生成文件名
+                # save_name = f"qkv_bsz{bsz}_qlen{q_len}_layer{self.layer_idx}.pt"
+                # save_path = os.path.join(save_dir, save_name)
+
+                # # 保存 query_states, key_states, value_states
+                # torch.save({
+                #     'query_states': query_states,
+                #     'key_states': key_states, 
+                #     'value_states': value_states
+                # }, save_path)
+
+                # if self.layer_idx > 3:
+                #     exit()
+                
                 # attn_output = spas_sage_attn(query_states, key_states, value_states, is_causal=True, )  # need to add other parameters
                 attn_output = self.sparse_attention(query_states, key_states, value_states, is_causal=True, )
                 if verbose:

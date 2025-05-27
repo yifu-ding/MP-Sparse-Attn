@@ -6,7 +6,7 @@ from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_blo
 from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
 
-iter_times = 100
+iter_times = 1
 def measure_time(func, *args, **kwargs):
     # warmup
     for _ in range(3):
