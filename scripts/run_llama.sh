@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=3
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 
 # 基础 attn 推理, tune mode
@@ -9,11 +9,11 @@ python evaluate/llama/llama_main.py \
     --model_out_path  ./evaluate/models_dict/llama-3.2-3b-instruct_l1_0.08_pv_l1_0.09-5shots.pt \
     --l1 0.08 \
     --pv_l1 0.09 \
-    --num_fewshots 1 \
-    --sparse_attention \
+    --num_fewshots 50 \
     --test_speedup \
     --test_accuracy \
     --test_dataset_name dureader \
+    --sparse_attention \
     # --tune \
     # --use_wandb \
     # \

@@ -347,7 +347,7 @@ class SparseAttentionMeansim(nn.Module):
                 o = rearrange(o, '... H L D -> ... L H D')
             torch.cuda.empty_cache()
         else:
-            assert self.cdfthreshd is not None, "attention hyperparameters should be tuned first"
+            # assert self.cdfthreshd is not None, "attention hyperparameters should be tuned first"
 
             kernel = self.kernel_selection(self.kernel_name)
             if self.kernel_name == "online_routing":
@@ -357,7 +357,7 @@ class SparseAttentionMeansim(nn.Module):
                     v,
                     mask,
                     is_causal=is_causal,
-                    skip_thresh=0.5
+                    skip_thresh=0.7
                 )
             else:
                 o = kernel(

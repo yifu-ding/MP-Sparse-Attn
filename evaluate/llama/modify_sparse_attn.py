@@ -20,6 +20,7 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
                                                                             layer_idx=layer_id, 
                                                                             verbose=verbose,
                                                                             kernel_name="online_routing"))
+                                                                            # kernel_name=None))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
         old_forward = layer.self_attn.forward
@@ -128,8 +129,8 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
                 attn_output = attn_output.view(bsz, q_len, -1)
                 attn_output = self.o_proj(attn_output)
 
-            # return attn_output, None, past_key_value
-            return attn_output, None
+            return attn_output, None, past_key_value   # for transformers==4.46.3
+            # return attn_output, None   # for transformers==4.52.3
 
         layer.self_attn.forward = types.MethodType(new_forward, layer.self_attn)
         
