@@ -1,11 +1,13 @@
 __pycache__
 spas_sage_attn.egg-info
 *.pkl
-/dist
-/build
+./dist
+./build
 *.so
 .DS_Store
 inst*.cu
-/unit_test
+./unit_test
 results/
 wandb/
+spas_sage_attn/*.so
+*.egg-info
