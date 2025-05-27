@@ -1,6 +1,0 @@
-# ninja log v5
-0	22836	1748077762320837111	/ssd/data/data/dyf/code/MP-Sparse-Attn/SpargeAttn/build/temp.linux-x86_64-3.10/csrc/qattn/pybind.o	702a1ec1ee667df3
-0	43137	1748077782621412535	/ssd/data/data/dyf/code/MP-Sparse-Attn/SpargeAttn/build/temp.linux-x86_64-3.10/csrc/qattn/qk_int_sv_f16_cuda_sm80.o	c672da5859954048
-0	43172	1748077782657413551	/ssd/data/data/dyf/code/MP-Sparse-Attn/SpargeAttn/build/temp.linux-x86_64-3.10/csrc/qattn/qk_int_sv_f8_cuda_sm89.o	2afa9188a92921f4
-3	21508	1748077804510027019	/ssd/data/data/dyf/code/MP-Sparse-Attn/SpargeAttn/build/temp.linux-x86_64-3.10/csrc/fused/pybind.o	8e14266ab9af1518
-3	40222	1748077823222547632	/ssd/data/data/dyf/code/MP-Sparse-Attn/SpargeAttn/build/temp.linux-x86_64-3.10/csrc/fused/fused.o	2b587518f0e5b29b
