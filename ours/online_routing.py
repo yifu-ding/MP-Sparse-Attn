@@ -24,7 +24,7 @@ import pdb
 
 
 @torch.compiler.disable
-def online_routing_attn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True, simthreshd1=0.3, cdfthreshd=0.96, pvthreshd=20, attention_sink=False, tensor_layout="HND", output_dtype=torch.float16, return_sparsity=False):
+def online_routing_attn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=True, attention_sink=False, tensor_layout="HND", output_dtype=torch.float16, return_sparsity=False, skip_thresh=None):
     assert q.size(-2)>=128, "seq_len should be not less than 128."
 
     torch.cuda.set_device(v.device)
@@ -45,7 +45,7 @@ def online_routing_attn(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False,
     q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k)  # 量化
     # pvthreshd = hyperparameter_check(pvthreshd, q.size(-3), q.device)
     # k_block_indices[:] = 1
-    o = forward(q_int8, k_int8, v, q_scale, k_scale,  is_causal=is_causal, tensor_layout="HND", output_dtype=dtype)
+    o = forward(q_int8, k_int8, v, q_scale, k_scale,  is_causal=is_causal, tensor_layout="HND", output_dtype=dtype, skip_thresh=skip_thresh)
 
     return o
 
@@ -61,7 +61,10 @@ def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
                     K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, start_m,  
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
-                    ):
+                    skip_thresh=None):
+    if skip_thresh is None:
+        skip_thresh = -1e6  # -inf
+        
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
     elif STAGE == 2:
@@ -98,7 +101,7 @@ def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
             # valid_qk = qk[mask_cumsum - 1, :]
             # qk = valid_qk
             # if cur_qk_max < sink_qk_max * thresh_1(start_n, lo, hi, BLOCK_N):
-            if cur_qk_max < sink_qk_max * 0.5:
+            if cur_qk_max < sink_qk_max * skip_thresh:
                 # tl.static_print(f"cur_qk_max: {cur_qk_max}, sink_qk_max: {sink_qk_max}")
                 continue
             
@@ -142,8 +145,8 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
               HEAD_DIM: tl.constexpr,  # 128
               BLOCK_M: tl.constexpr,  # 128
               BLOCK_N: tl.constexpr,  # 64
-              STAGE: tl.constexpr     # 1, 3
-              ):
+              STAGE: tl.constexpr,     # 1, 3
+              skip_thresh=None):
     start_m = tl.program_id(0)
     off_z = tl.program_id(2).to(tl.int64)
     off_h = tl.program_id(1).to(tl.int64)
@@ -170,19 +173,19 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
     acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
                                     start_m,  
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
-                                    4 - STAGE, offs_m, offs_n   # STAGE=1,3 --> 3,1
+                                    4 - STAGE, offs_m, offs_n, skip_thresh   # STAGE=1,3 --> 3,1
                                     )
     if STAGE != 1:  # STAGE=3 --> STAGE=2
         acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                        start_m,  
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  
-                                        2, offs_m, offs_n 
+                                        2, offs_m, offs_n, skip_thresh
                                         )
     acc = acc / l_i[:, None]
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
 
 
-def forward(q, k, v, q_scale, k_scale, pvthreshd=None, is_causal=False, tensor_layout="HND", output_dtype=torch.float16):
+def forward(q, k, v, q_scale, k_scale, pvthreshd=None, is_causal=False, tensor_layout="HND", output_dtype=torch.float16, skip_thresh=None):
     BLOCK_M = 128
     BLOCK_N = 64
     stage = 3 if is_causal else 1
@@ -222,5 +225,5 @@ def forward(q, k, v, q_scale, k_scale, pvthreshd=None, is_causal=False, tensor_l
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
         STAGE=stage,  
         num_warps=4 if head_dim == 64 else 8,
-        num_stages=4)
+        num_stages=4, skip_thresh=skip_thresh)
     return o

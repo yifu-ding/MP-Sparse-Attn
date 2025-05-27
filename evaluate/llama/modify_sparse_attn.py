@@ -15,7 +15,11 @@ import types
 def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
     for layer_id, layer in enumerate(model.model.layers):
 
-        setattr(layer.self_attn, 'sparse_attention', SparseAttentionMeansim(l1=l1, pv_l1=pv_l1, layer_idx=layer_id, verbose=verbose))
+        setattr(layer.self_attn, 'sparse_attention', SparseAttentionMeansim(l1=l1, 
+                                                                            pv_l1=pv_l1, 
+                                                                            layer_idx=layer_id, 
+                                                                            verbose=verbose,
+                                                                            kernel_name="online_routing"))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
         old_forward = layer.self_attn.forward

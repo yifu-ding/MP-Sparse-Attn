@@ -6,7 +6,7 @@ from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_blo
 from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
 
-iter_times = 1
+iter_times = 100
 def measure_time(func, *args, **kwargs):
     # warmup
     for _ in range(3):
@@ -163,17 +163,17 @@ def test_performance():
     print("\n*** spas_sage_attn_meansim:")
     print(f"get_block_map_meansim: {time_block_map:.2f} ms ({time_block_map/time_total_spas*100:.2f}%)")
     print(f"per_block_int8: {time_int8:.2f} ms ({time_int8/time_total_spas*100:.2f}%)")
-    print(f"forward: {time_forward:.2f} ms ({time_forward/time_total_spas*100:.2f}%)")
+    print(f"forward: {time_forward:.2f} ms ({time_forward/time_total_spas*100:.2f}%), average time: {time_forward/iter_times:.2f} ms")
 
-    print(f"\ntime_total_spas: {time_total_spas:.2f} ms")
-    print(f"time_total_spas_full: {time_total_spas_full:.2f} ms")
+    print(f"\ntime_total_spas: {time_total_spas:.2f} ms, average time: {time_total_spas/iter_times:.2f} ms")
+    print(f"time_total_spas_full: {time_total_spas_full:.2f} ms, average time: {time_total_spas_full/iter_times:.2f} ms")
     
-    print(f"spas_sage_attn_meansim_cuda: {time_total_spas_cuda:.2f} ms")
-    print(f"spas_sage_attn_meansim_cuda_full: {time_total_spas_cuda_full:.2f} ms")
+    print(f"spas_sage_attn_meansim_cuda: {time_total_spas_cuda:.2f} ms, average time: {time_total_spas_cuda/iter_times:.2f} ms")
+    print(f"spas_sage_attn_meansim_cuda_full: {time_total_spas_cuda_full:.2f} ms, average time: {time_total_spas_cuda_full/iter_times:.2f} ms")
     
-    print(f"torch.nn.functional.scaled_dot_product_attention: {time_total_sdpa:.2f} ms")
+    print(f"torch.nn.functional.scaled_dot_product_attention: {time_total_sdpa:.2f} ms, average time: {time_total_sdpa/iter_times:.2f} ms")
     
-    print(f"flash-attention triton: {time_total_flash:.2f} ms")
+    print(f"flash-attention triton: {time_total_flash:.2f} ms, average time: {time_total_flash/iter_times:.2f} ms")
     
     # print("\n性能对比:")
     # print(f"spas_sage_attn_meansim / scaled_dot_product_attention = {time_total_sdpa/time_total_spas:.2f}")

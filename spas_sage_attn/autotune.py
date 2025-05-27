@@ -25,6 +25,7 @@ from spas_sage_attn import spas_sage_attn_meansim_cuda, spas_sage2_attn_meansim_
 from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim
 import warnings
 from einops import rearrange
+from ours.online_routing import online_routing_attn
 
 def extract_sparse_attention_state_dict(model, verbose=False):
     saved_state_dict = {}
@@ -77,7 +78,7 @@ from tools.gpu_process import GPUProcessPoolExecutor
 executor = GPUProcessPoolExecutor()
 
 class SparseAttentionMeansim(nn.Module):
-    def __init__(self, sim_rule="l1", l1=0.07, pv_l1=0.08, cos_sim=0.98, rmse=0.07, rearrange_kwargs={}, tune_pv=True, layer_idx=-1, verbose=False):
+    def __init__(self, sim_rule="l1", l1=0.07, pv_l1=0.08, cos_sim=0.98, rmse=0.07, rearrange_kwargs={}, tune_pv=True, layer_idx=-1, verbose=False, kernel_name=None):
         super(SparseAttentionMeansim, self).__init__()
         self.layer_idx = layer_idx
         self.head_num = None
@@ -99,6 +100,7 @@ class SparseAttentionMeansim(nn.Module):
         self.rearrange_kwargs = rearrange_kwargs
         self.tune_pv = tune_pv
         self.verbose = verbose
+        self.kernel_name = kernel_name
     
     def is_sim(self, o_gt, o_sparse):
         if self.sim_rule == "cosine":
@@ -136,16 +138,19 @@ class SparseAttentionMeansim(nn.Module):
         self.num_data_passed = 0
         self.hyperparams_cache = {}
 
-    def kernel_selection(self):
-        sm = torch.cuda.get_device_capability()
-        sm = 10*sm[0] + sm[1]
-        if sm >= 89:
-            return spas_sage2_attn_meansim_cuda
-        else:
-            # warnings.warn(f'{sm=}, do not support sageattn2, using sageattn1 kernel')
-            # return spas_sage_attn_meansim_cuda
-            return spas_sage_attn_meansim   # triton kernel 
-
+    def kernel_selection(self, kernel_name=None):
+        if kernel_name == None:
+            sm = torch.cuda.get_device_capability()
+            sm = 10*sm[0] + sm[1]
+            if sm >= 89:
+                return spas_sage2_attn_meansim_cuda
+            else:
+                # warnings.warn(f'{sm=}, do not support sageattn2, using sageattn1 kernel')
+                # return spas_sage_attn_meansim_cuda
+                return spas_sage_attn_meansim   # triton kernel 
+        elif kernel_name == "online_routing":
+            return online_routing_attn
+            
     @torch.no_grad()
     def tune_pvthreshd(self, qi, ki, vi, mask=None, is_causal=False, smooth_k=True, simthreshd1=None, cdfthreshd=None):
         gt_i = F.scaled_dot_product_attention(qi, ki, vi, mask, is_causal=is_causal)
@@ -344,23 +349,33 @@ class SparseAttentionMeansim(nn.Module):
         else:
             assert self.cdfthreshd is not None, "attention hyperparameters should be tuned first"
 
-            kernel = self.kernel_selection()
-            o = kernel(
-                q,
-                k,
-                v,
-                mask,
-                is_causal=is_causal,
-                smooth_k=smooth_k,
-                scale=scale,
-                tensor_layout=tensor_layout,
-                cdfthreshd=self.cdfthreshd,
-                simthreshd1=self.simthreshd1,
-                pvthreshd=self.pvthreshd.float(),
-                return_sparsity=return_sparsity,
-                attention_sink= True,  # Only keep True when inference !!!!
-            )
-        
+            kernel = self.kernel_selection(self.kernel_name)
+            if self.kernel_name == "online_routing":
+                o = kernel(
+                    q,
+                    k,
+                    v,
+                    mask,
+                    is_causal=is_causal,
+                    skip_thresh=0.5
+                )
+            else:
+                o = kernel(
+                    q,
+                    k,
+                    v,
+                    mask,
+                    is_causal=is_causal,
+                    smooth_k=smooth_k,
+                    scale=scale,
+                    tensor_layout=tensor_layout,
+                    cdfthreshd=self.cdfthreshd,
+                    simthreshd1=self.simthreshd1,
+                    pvthreshd=self.pvthreshd.float(),
+                    return_sparsity=return_sparsity,
+                    attention_sink= True,  # Only keep True when inference !!!!
+                )
+            
         if return_sparsity:
             o, total_sparsity = o
             return o, total_sparsity
