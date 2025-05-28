@@ -120,7 +120,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
             f.write('\n')
     # dist.destroy_process_group()
     end_time = time.time()
-    print(f"***** Time taken in pred(): {end_time - start_time:.2f} seconds for 10 samples on {dataset}. *****")
+    print(f"***** Time taken in pred(): {end_time - start_time:.2f} seconds for {num_fewshots} samples on {dataset}. *****")
 
 
 
@@ -183,7 +183,7 @@ def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format,
     # dist.destroy_process_group()
     end_time = time.time()
     print(f"***** Time taken per sample: {(end_time - start_time)/num_fewshots:.2f} seconds on {dataset}. *****")
-
+    return (end_time - start_time)/num_fewshots
 
 def load_model_and_tokenizer(path, model_name, device):
     if "chatglm" in model_name or "internlm" in model_name or "xgen" in model_name:

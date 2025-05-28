@@ -12,14 +12,15 @@ from spas_sage_attn.autotune import SparseAttentionMeansim
 import types
 
 
-def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False):
+def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False, skip_thresh=None, kernel_name=None):
     for layer_id, layer in enumerate(model.model.layers):
 
         setattr(layer.self_attn, 'sparse_attention', SparseAttentionMeansim(l1=l1, 
                                                                             pv_l1=pv_l1, 
                                                                             layer_idx=layer_id, 
                                                                             verbose=verbose,
-                                                                            kernel_name="online_routing"))
+                                                                            kernel_name=kernel_name,
+                                                                            skip_thresh=skip_thresh))
                                                                             # kernel_name=None))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
