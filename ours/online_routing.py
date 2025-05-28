@@ -76,6 +76,8 @@ def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
     elif STAGE == 3:
         lo, hi = 0, kv_len
     # import pdb; pdb.set_trace()
+    # tl.static_print(f"STAGE={STAGE}")
+    sink_qk_max = 0.
     for start_n in range(lo, hi, BLOCK_N):
         
         k_mask = offs_n[None, :] < (kv_len - start_n)   
@@ -86,6 +88,7 @@ def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
             # baseblock
             # sink_qk_mean = tl.sum(qk) / (BLOCK_M * BLOCK_N)
             sink_qk_max = tl.sum(tl.max(qk, 1)) / BLOCK_M
+            cur_qk_max = sink_qk_max
             # tl.static_print(f"sink_qk_max: {sink_qk_max}")
         else:
             # cur_qk_max = tl.max(qk, 1)
@@ -100,38 +103,40 @@ def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
             # mask_cumsum = tl.cumsum(mask.to(tl.int32))
             # valid_qk = qk[mask_cumsum - 1, :]
             # qk = valid_qk
-            # if cur_qk_max < sink_qk_max * thresh_1(start_n, lo, hi, BLOCK_N):
-            if cur_qk_max < sink_qk_max * skip_thresh:
-                # tl.static_print(f"cur_qk_max: {cur_qk_max}, sink_qk_max: {sink_qk_max}")
-                continue
             
-        if STAGE == 2:
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk + tl.where(mask, 0, -1.0e6)
-            local_m = tl.max(qk, 1)
-            new_m = tl.maximum(old_m, local_m)
-            qk -= new_m[:, None]
-        else:
-            local_m = tl.max(qk, 1)
-            new_m = tl.maximum(old_m, local_m)
-            qk = qk - new_m[:, None]
-        
-        p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
-        alpha = tl.math.exp2(old_m - new_m)
-        l_i = l_i * alpha + l_ij
-        acc = acc * alpha[:, None]
-        
-        # if tl.min(new_m - local_m) < pvthreshd:
-        v = tl.load(V_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
+            # if cur_qk_max < sink_qk_max * thresh_1(start_n, lo, hi, BLOCK_N):
+            # if cur_qk_max >= sink_qk_max * skip_thresh:
+                # tl.static_print(f"cur_qk_max: {cur_qk_max}, sink_qk_max: {sink_qk_max}")
+                # continue
+            
+        if start_n == lo or cur_qk_max >= sink_qk_max * skip_thresh: 
+            if STAGE == 2:
+                mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+                qk = qk + tl.where(mask, 0, -1.0e6)
+                local_m = tl.max(qk, 1)
+                new_m = tl.maximum(old_m, local_m)
+                qk -= new_m[:, None]
+            else:
+                local_m = tl.max(qk, 1)
+                new_m = tl.maximum(old_m, local_m)
+                qk = qk - new_m[:, None]
+            
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            alpha = tl.math.exp2(old_m - new_m)
+            l_i = l_i * alpha + l_ij
+            acc = acc * alpha[:, None]
+            
+            # if tl.min(new_m - local_m) < pvthreshd:
+            v = tl.load(V_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
 
-        p = p.to(tl.float16)
-        acc += tl.dot(p, v, out_dtype=tl.float16)
-        old_m = new_m
-        
-        K_ptrs += BLOCK_N * stride_kn
-        K_scale_ptr += 1
-        V_ptrs += BLOCK_N * stride_vn
+            p = p.to(tl.float16)
+            acc += tl.dot(p, v, out_dtype=tl.float16)
+            old_m = new_m
+            
+            K_ptrs += BLOCK_N * stride_kn
+            K_scale_ptr += 1
+            V_ptrs += BLOCK_N * stride_vn
     return acc, l_i, old_m
 
 @triton.jit

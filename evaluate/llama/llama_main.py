@@ -42,7 +42,6 @@ def main():
                       help='running device (cuda/cpu)')
     
     # 稀疏注意力相关参数  
-    parser.add_argument('--sparse_attention', action='store_true', help="use sparse attention")
     parser.add_argument('--tune', action='store_true', help="whether to tune")
     parser.add_argument('--verbose', action='store_true', help="whether to print verbose")
     parser.add_argument('--l1', type=float, default=0.06, help='l1 bound for qk sparse')
@@ -63,6 +62,10 @@ def main():
     # test config
     parser.add_argument('--test_accuracy', action='store_true', help="test accuracy")
     parser.add_argument('--test_speedup', action='store_true', help="test speedup")
+    
+    # our method
+    parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
+    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name")
 
     
     # 解析参数
@@ -70,13 +73,21 @@ def main():
     assert args.test_accuracy or args.test_speedup, "must choose one of test_accuracy or test_speedup"
     if args.test_accuracy: print("***** test accuracy *****")
     if args.test_speedup: print(f"***** test speedup on {args.num_fewshots} samples *****")
-        
+    
+    print(f"***** args: {args} *****")
+    
     device = torch.device(args.device)
     args.model = args.model.replace("/", "--").lower()
     
     # initialize wandb
     if args.use_wandb:
-        run = wandb.init(project='mp-sparse', name=args.model, entity='eveedyf-google')
+        if args.kernel_name == "online_routing":
+            wandb_name = f"{args.model}-{args.kernel_name}-{args.skip_thresh}-{args.num_fewshots}shots-{args.test_dataset_name}"
+        elif "spargeattn" in args.kernel_name:
+            wandb_name = f"{args.model}-{args.kernel_name}-{args.l1}-{args.pv_l1}-{args.num_fewshots}shots-{args.test_dataset_name}"
+        else:
+            wandb_name = f"{args.model}-naive-{args.num_fewshots}shots-{args.test_dataset_name}"
+        run = wandb.init(project='mp-sparse', name=wandb_name, entity='eveedyf-google')
     
     # define model and tokenizer
     model2path = json.load(open("evaluate/datasets/text/longbench/config/model2path.json", "r"))
@@ -111,15 +122,14 @@ def main():
         os.makedirs(out_path_pred_e)
         
     # finetune the model with sparse attention, store the state_dict
-    if args.sparse_attention:
-        # model_out_path = os.path.join(args.model_out_path, f"{args.model}_l1_{args.l1}_pv_l1_{args.pv_l1}-{args.num_fewshots}shots.pt")
+    if "spargeattn" in args.kernel_name:
         model_out_path = args.model_out_path    
         
         if args.tune:
             os.environ["TUNE_MODE"] = "1"  # enable tune mode
 
             # 设置稀疏注意力并进行tune
-            set_spas_sage_attn_llama(model, verbose=args.verbose, l1=args.l1, pv_l1=args.pv_l1)
+            set_spas_sage_attn_llama(model, verbose=args.verbose, l1=args.l1, pv_l1=args.pv_l1, kernel_name=args.kernel_name)
             print("replace sparse attention and start tune!")
             
             # tune_dataset = "qasper"
@@ -192,12 +202,18 @@ def main():
             # 加载之前保存的state_dict
             if os.path.exists(model_out_path):
                 saved_state_dict = torch.load(model_out_path)
-                set_spas_sage_attn_llama(model, verbose=args.verbose, l1=args.l1, pv_l1=args.pv_l1)
+                set_spas_sage_attn_llama(model, verbose=args.verbose, l1=args.l1, pv_l1=args.pv_l1, kernel_name=args.kernel_name)
                 load_sparse_attention_state_dict(model, saved_state_dict)
-                print("replace sparse attention and load state dict!")
+                print("replace sparge attention and load state dict!")
             else:
                 raise ValueError(f"not find tuned model state dict: {model_out_path}")
-
+    elif args.kernel_name == "online_routing":
+        set_spas_sage_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name)
+        print("replace outline_routing!")
+    else:
+        print("use the original transformer attention!")
+        
+        
     model.eval()  # 设置为评估模式
     os.environ["TUNE_MODE"] = "0"  # disable tune mode
     # world_size = torch.cuda.device_count()
@@ -227,7 +243,9 @@ def main():
                 out_path = os.path.join(out_path_pred, model_name, f"{dataset}.jsonl")
             prompt_format = dataset2prompt[dataset]
             max_gen = dataset2maxlen[dataset]
-            get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=args.num_fewshots)
+            time_per_sample = get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=args.num_fewshots)
+            if args.use_wandb:
+                wandb.log({"time_per_sample": time_per_sample})
             
     if args.test_accuracy:
         for dataset in datasets:
@@ -302,7 +320,10 @@ def main():
         print("\n******* Evaluation Results: *******")
         for dataset_name in datasets:
             if dataset_name in scores:
-                print(f"{dataset_name}: {scores[dataset_name]:.2f}")
+                score = scores[dataset_name]
+                print(f"{dataset_name}: {score:.2f}")
+                if args.use_wandb:
+                    wandb.log({f"{dataset_name}_score": score})
         
 if __name__ == "__main__":
     main()

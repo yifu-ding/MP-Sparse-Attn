@@ -78,7 +78,8 @@ from tools.gpu_process import GPUProcessPoolExecutor
 executor = GPUProcessPoolExecutor()
 
 class SparseAttentionMeansim(nn.Module):
-    def __init__(self, sim_rule="l1", l1=0.07, pv_l1=0.08, cos_sim=0.98, rmse=0.07, rearrange_kwargs={}, tune_pv=True, layer_idx=-1, verbose=False, kernel_name=None):
+    def __init__(self, sim_rule="l1", l1=0.07, pv_l1=0.08, cos_sim=0.98, rmse=0.07, rearrange_kwargs={}, tune_pv=True, 
+                 layer_idx=-1, verbose=False, kernel_name=None, skip_thresh=None):
         super(SparseAttentionMeansim, self).__init__()
         self.layer_idx = layer_idx
         self.head_num = None
@@ -101,6 +102,7 @@ class SparseAttentionMeansim(nn.Module):
         self.tune_pv = tune_pv
         self.verbose = verbose
         self.kernel_name = kernel_name
+        self.skip_thresh = skip_thresh
     
     def is_sim(self, o_gt, o_sparse):
         if self.sim_rule == "cosine":
@@ -139,17 +141,21 @@ class SparseAttentionMeansim(nn.Module):
         self.hyperparams_cache = {}
 
     def kernel_selection(self, kernel_name=None):
-        if kernel_name == None:
+        if kernel_name == "spargeattn_triton":
+            return spas_sage_attn_meansim   # triton kernel 
+        elif kernel_name == None or kernel_name == "spargeattn_cuda":
             sm = torch.cuda.get_device_capability()
             sm = 10*sm[0] + sm[1]
             if sm >= 89:
                 return spas_sage2_attn_meansim_cuda
             else:
                 # warnings.warn(f'{sm=}, do not support sageattn2, using sageattn1 kernel')
-                # return spas_sage_attn_meansim_cuda
-                return spas_sage_attn_meansim   # triton kernel 
+                return spas_sage_attn_meansim_cuda
+                # return spas_sage_attn_meansim   # triton kernel 
         elif kernel_name == "online_routing":
             return online_routing_attn
+        else:
+            raise ValueError(f"not support kernel name: {kernel_name}")
             
     @torch.no_grad()
     def tune_pvthreshd(self, qi, ki, vi, mask=None, is_causal=False, smooth_k=True, simthreshd1=None, cdfthreshd=None):
@@ -347,7 +353,7 @@ class SparseAttentionMeansim(nn.Module):
                 o = rearrange(o, '... H L D -> ... L H D')
             torch.cuda.empty_cache()
         else:
-            assert self.cdfthreshd is not None, "attention hyperparameters should be tuned first"
+            # assert self.cdfthreshd is not None, "attention hyperparameters should be tuned first"
 
             kernel = self.kernel_selection(self.kernel_name)
             if self.kernel_name == "online_routing":
@@ -357,7 +363,7 @@ class SparseAttentionMeansim(nn.Module):
                     v,
                     mask,
                     is_causal=is_causal,
-                    skip_thresh=0.5
+                    skip_thresh=self.skip_thresh
                 )
             else:
                 o = kernel(
