@@ -6,7 +6,7 @@ python evaluate/llama/llama_main.py \
     --model Llama-3.2-3B-Instruct \
     --device cuda \
     --output_path ./results \
-    --model_out_path  ./evaluate/models_dict/llama-3.2-3b-instruct_l1_0.08_pv_l1_0.09-5shots.pt \
+    --model_out_path  ./evaluate/models_dict/llama-3.2-3b-instruct_l1_0.08_pv_l1_0.09-20shots.pt \
     --l1 0.08 \
     --pv_l1 0.09 \
     --num_fewshots 1 \
