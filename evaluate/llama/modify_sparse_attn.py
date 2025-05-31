@@ -130,8 +130,8 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False, skip_th
                 attn_output = attn_output.view(bsz, q_len, -1)
                 attn_output = self.o_proj(attn_output)
 
-            return attn_output, None, past_key_value   # for transformers==4.46.3
-            # return attn_output, None   # for transformers==4.52.3
+            # return attn_output, None, past_key_value   # for transformers==4.46.3
+            return attn_output, None   # for transformers==4.52.3
 
         layer.self_attn.forward = types.MethodType(new_forward, layer.self_attn)
         
