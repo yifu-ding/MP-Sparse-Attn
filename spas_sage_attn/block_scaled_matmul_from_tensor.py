@@ -222,10 +222,16 @@ def block_scaled_matmul_kernel(  #
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         # a = a_desc.load([offs_am, offs_k_a])
         # b = b_desc.load([offs_bn, offs_k_b])
-
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + (offs_k_a + tl.arange(0, BLOCK_K//2))[None, :])
-        b_ptrs = b_ptr + (offs_bn[:, None] * stride_bn + (offs_k_b + tl.arange(0, BLOCK_K//2))[None, :])
-        
+        if ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + (offs_k_a + tl.arange(0, BLOCK_K//2))[None, :])
+            b_ptrs = b_ptr + (offs_bn[:, None] * stride_bn + (offs_k_b + tl.arange(0, BLOCK_K//2))[None, :])
+        elif MIXED_PREC:
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + (offs_k_a + tl.arange(0, BLOCK_K))[None, :])
+            b_ptrs = b_ptr + (offs_bn[:, None] * stride_bn + (offs_k_b + tl.arange(0, BLOCK_K//2))[None, :])
+        else:
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + (offs_k_a + tl.arange(0, BLOCK_K))[None, :])
+            b_ptrs = b_ptr + (offs_bn[:, None] * stride_bn + (offs_k_b + tl.arange(0, BLOCK_K))[None, :])
+            
         # 使用mask处理边界情况
         # a_mask = (offs_am[:, None] < M) & ((offs_k_a + tl.arange(0, BLOCK_K))[None, :] < K)
         # b_mask = (offs_bn[:, None] < N) & ((offs_k_b + tl.arange(0, BLOCK_K))[None, :] < K)
@@ -326,6 +332,7 @@ def initialize_block_scaled_from_tensor(a_tensor, b_tensor, a_scale, b_scale, bl
     assert b_scale.shape == expected_b_scale_shape, f"b_scale形状不匹配: 期望{expected_b_scale_shape}, 实际{b_scale.shape}"
   
     # 根据block_scale_type处理输入数据
+    # import pdb; pdb.set_trace()
     if block_scale_type in ["mxfp8", "mixed"]:
         a = a_tensor.to(torch.float8_e5m2)
         a_ref = a.to(torch.float32)
@@ -333,9 +340,10 @@ def initialize_block_scaled_from_tensor(a_tensor, b_tensor, a_scale, b_scale, bl
         # 对于fp4格式, 这里需要将fp16数据转换为packed fp4格式
         # 简化处理：直接使用原tensor, 实际应用中需要进行fp4 packing
         # a = a_tensor
-        a = MXFP4Tensor(data=a_tensor.to(torch.float32))
+        a = MXFP4Tensor(data=a_tensor, dtype=torch.uint8)
         a_ref = a.to(torch.float32)
         a = a.to_packed_tensor(dim=1)
+        
     a_desc = a
 
     if block_scale_type == "mxfp8": 
@@ -345,9 +353,10 @@ def initialize_block_scaled_from_tensor(a_tensor, b_tensor, a_scale, b_scale, bl
         # 对于fp4格式, 这里需要将fp16数据转换为packed fp4格式
         # 简化处理：直接使用原tensor, 实际应用中需要进行fp4 packing
         # b = b_tensor
-        b = MXFP4Tensor(data=b_tensor.to(torch.float32))
+        b = MXFP4Tensor(data=b_tensor, dtype=torch.uint8)
         b_ref = b.to(torch.float32)
         b = b.to_packed_tensor(dim=1)
+
     b_desc = b
 
     # 处理scale因子
@@ -373,12 +382,13 @@ def initialize_block_scaled_from_tensor(a_tensor, b_tensor, a_scale, b_scale, bl
         def unpack_scale(packed):
             num_chunk_m, num_chunk_k, _, _, _ = packed.shape
             return packed.permute(0, 3, 2, 1, 4).reshape(num_chunk_m * 128, num_chunk_k * 4).contiguous()
-        
+
         # 展开scale因子到原始矩阵大小
         a_scale_expanded = unpack_scale(a_scale_ref).repeat_interleave(VEC_SIZE, dim=1)[:M, :K]
         b_scale_expanded = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
         
         # 计算参考结果：(A * scale_a) @ (B * scale_b)
+        # import pdb; pdb.set_trace()
         reference = torch.matmul(a_ref * a_scale_expanded, b_ref * b_scale_expanded)
     
     configs = {
@@ -390,8 +400,10 @@ def initialize_block_scaled_from_tensor(a_tensor, b_tensor, a_scale, b_scale, bl
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,
     }
-    
-    return a_desc, a_scale, b_desc, b_scale, configs, reference
+    if compute_reference:
+        return a_desc, a_scale, b_desc, b_scale, configs, (reference, a_ref * a_scale_expanded, (b_ref * b_scale_expanded).T)
+    else:
+        return a_desc, a_scale, b_desc, b_scale, configs, None
 
 
 def validate_block_scaled_from_tensor(M, N, K, block_scale_type="nvfp4"):
@@ -466,6 +478,7 @@ def show_profile(profile_name):
     file_name = f"{profile_name}.hatchet"
     tree, metrics = proton_viewer.parse(metric_names, file_name)
     proton_viewer.print_tree(tree, metrics)
+
 
 
 if __name__ == "__main__":

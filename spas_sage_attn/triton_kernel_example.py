@@ -177,7 +177,7 @@ def forward(q, k, k_block_id, v, q_scale, k_scale, pvthreshd, is_causal=False, t
     HEAD_DIM_K = head_dim
     num_kv_groups = h_qo // h_kv
 
-    grid = (triton.cdiv(qo_len, BLOCK_M), h_qo, b   )
+    grid = (triton.cdiv(qo_len, BLOCK_M), h_qo, b )
     _attn_fwd[grid](
         q, k, k_block_id, v, q_scale, k_scale, pvthreshd, o,  
         stride_bz_q, stride_h_q, stride_seq_q, 

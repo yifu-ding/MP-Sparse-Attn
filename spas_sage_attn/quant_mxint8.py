@@ -83,10 +83,10 @@ def quant_fpxint8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
 
     # q_scale = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
     # k_scale = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32)
-    # q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.float32)  
-    # k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.float32)
-    q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.float8_e4m3fn)  
-    k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.float8_e4m3fn)
+    q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.float32)  
+    k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.float32)
+    # q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.float8_e5m2)  
+    # k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.float8_e5m2)
     
     if sm_scale is None:
         sm_scale = head_dim**-0.5
@@ -162,7 +162,7 @@ def quant_fpxint8_warp(q, k, BLKQ=128, WARPQ=32, BLKK=64, WARPK=64, tensor_layou
     return q_int8, q_scale, k_int8, k_scale
 
 @triton.jit
-def quant_mxfp8e4_kernel(Input, Output, Scale, L,
+def quant_mxfp8e5_kernel(Input, Output, Scale, L,
                     stride_iz, stride_ih, stride_in,
                     stride_oz, stride_oh, stride_on,
                     stride_sz, stride_sh, stride_sn,
@@ -188,7 +188,7 @@ def quant_mxfp8e4_kernel(Input, Output, Scale, L,
     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
     
     # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
-    emax_elem = 9 # 经验性的
+    emax_elem = 7 # 经验性的
     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
 
     shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
@@ -197,9 +197,9 @@ def quant_mxfp8e4_kernel(Input, Output, Scale, L,
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
     # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
-    # x_quant = tl.clamp(x_quant, -57344, 57344)
-    x_quant = tl.clamp(x_quant, -448, 448)
-    x_quant = x_quant.to(tl.float8e4nv)
+    x_quant = tl.clamp(x_quant, -57344, 57344)
+    # x_quant = tl.clamp(x_quant, -448, 448)
+    x_quant = x_quant.to(tl.float8e5)
     
     # 6. 存储量化后的值和scale
     x_fp8 = tl.reshape(x_quant, x.shape)
@@ -207,9 +207,9 @@ def quant_mxfp8e4_kernel(Input, Output, Scale, L,
     tl.store(scale_ptrs, shared_scale)
 
 
-def quant_mxfp8e4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
-    q_fp8 = torch.empty(q.shape, dtype=torch.float8_e4m3fn, device=q.device)
-    k_fp8 = torch.empty(k.shape, dtype=torch.float8_e4m3fn, device=k.device)
+def quant_mxfp8e5(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
+    q_fp8 = torch.empty(q.shape, dtype=torch.float8_e5m2, device=q.device)
+    k_fp8 = torch.empty(k.shape, dtype=torch.float8_e5m2, device=k.device)
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
@@ -237,7 +237,7 @@ def quant_mxfp8e4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         sm_scale = head_dim**-0.5
 
     grid = ((qo_len + BLKQ - 1) // BLKQ, h_qo, b)
-    quant_mxfp8e4_kernel[grid](
+    quant_mxfp8e5_kernel[grid](
         q, q_fp8, q_scale, qo_len,
         stride_bz_q, stride_h_q, stride_seq_q,
         stride_bz_qo, stride_h_qo, stride_seq_qo,
@@ -247,7 +247,7 @@ def quant_mxfp8e4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     )
 
     grid = ((kv_len + BLKK - 1) // BLKK, h_kv, b)
-    quant_mxfp8e4_kernel[grid](
+    quant_mxfp8e5_kernel[grid](
         k, k_fp8, k_scale, kv_len,
         stride_bz_k, stride_h_k, stride_seq_k,
         stride_bz_ko, stride_h_ko, stride_seq_ko,
@@ -266,7 +266,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
                     stride_oz, stride_oh, stride_on,
                     stride_sz, stride_sh, stride_sn,
                     sm_scale,
-                    C: tl.constexpr, BLK: tl.constexpr):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
+                    C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
     off_b = tl.program_id(2)
@@ -287,7 +287,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
     
     # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
-    emax_elem = 4 # 经验性的
+    emax_elem = 3 # 经验性的
     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
 
     shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
@@ -308,8 +308,9 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
                   tl.where(abs_x >= 1.0, 1, 0))
     # 3. 获取尾数位 (1位)
     # 首先将数值规范化到[1,2)区间
-    norm_x = abs_x / (tl.exp2(exp.to(tl.float32)))
-    mantissa = tl.where(norm_x >= 1.5, 1, 0)
+    bias = 1.0
+    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
     # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在float8里
     # x_quant = (sign << 7) | (exp << 3) | (mantissa << 2)
     x_quant = (sign << 3) | (exp << 1) | mantissa
@@ -319,6 +320,103 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     x_quant = x_quant.to(tl.uint8)
     # x_quant = x_quant.to(tl.float8e5)
     
+    # 6. 存储量化后的值和scale
+    x_uint8 = tl.reshape(x_quant, x.shape)
+    tl.store(output_ptrs, x_uint8, mask=offs_n[:, None] < L)
+    tl.store(scale_ptrs, shared_scale)
+
+@triton.jit
+def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
+                    stride_iz, stride_ih, stride_in,
+                    stride_oz, stride_oh, stride_on,
+                    stride_sz, stride_sh, stride_sn,
+                    sm_scale,
+                    C: tl.constexpr, BLK: tl.constexpr,
+                    candidates_ptr, 
+                    # candidate_E_ptr, candidate_M_ptr
+                    ):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
+    # idx = tl.arange(0, 8)
+    # candidates = tl.load(candidates_ptr + idx)
+    # candidate_M = tl.load(candidate_M_ptr + idx)
+
+    # 预定义候选值，避免重复计算
+    # candidates = tl.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], type=tl.float32)
+    
+    off_blk = tl.program_id(0)
+    off_h = tl.program_id(1)
+    off_b = tl.program_id(2)
+
+    offs_n = off_blk * BLK + tl.arange(0, BLK)
+    offs_k = tl.arange(0, C)
+    offs_n_32 = tl.arange(0, C//32)
+
+    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
+
+    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+    x = x.to(tl.float32)
+    x *= sm_scale
+
+    x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
+    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
+    
+    # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
+    emax_elem = 3 # 经验性的
+    shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
+
+    shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
+    
+    shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
+    x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
+  
+    # 获取符号位
+    S = tl.where(x_quant >= 0, 0, 1)
+    abs_x = tl.abs(x_quant)
+    # 判断是否为0或无效值
+    is_zero = (abs_x == 0)
+
+    # **关键优化：避免大张量，直接在原维度上计算**
+    # 初始化最佳候选索引
+    best_indices = tl.zeros_like(abs_x).to(tl.int32)
+    min_error = tl.full(abs_x.shape, float('10000'), dtype=tl.float32)
+    
+    # 逐个候选值计算，避免大的broadcast
+    for i in tl.static_range(8):
+        # candidate_val = candidates[i]
+        candidate_val = tl.load(candidates_ptr + i)
+        # candidate_val = i
+        current_error = tl.abs(abs_x - candidate_val)
+        
+        # 更新最小误差和索引
+        is_better = current_error < min_error
+        min_error = tl.where(is_better, current_error, min_error)
+        best_indices = tl.where(is_better, i, best_indices)
+    
+    # 处理平局情况 - 优先选择偶数尾数
+    # for i in tl.static_range(8):
+    #     # candidate_val = candidates[i]
+    #     candidate_val = tl.load(candidates_ptr + i)
+    #     is_tie = tl.abs(tl.abs(abs_x - candidate_val) - min_error) < 1e-6
+    #     is_even_mantissa = (tl.load(candidate_M_ptr + i) == 0)
+    #     should_prefer = is_tie & is_even_mantissa
+    #     best_indices = tl.where(should_prefer, i, best_indices)
+
+    # 直接计算E和M，避免额外的reshape
+    E = best_indices // 2
+    M = best_indices % 2
+    # E = tl.load(candidate_E_ptr + best_indices)
+    # M = tl.load(candidate_M_ptr + best_indices)
+    
+    # import pdb; pdb.set_trace()
+    # 处理0
+    # E = tl.where(is_zero, 0, E)
+    # M = tl.where(is_zero, 0, M)
+    
+    # 组合成最终的量化值
+    x_quant = (S << 3) | (E << 1) | M
+    x_quant = x_quant.to(tl.uint8)
+
     # 6. 存储量化后的值和scale
     x_uint8 = tl.reshape(x_quant, x.shape)
     tl.store(output_ptrs, x_uint8, mask=offs_n[:, None] < L)
@@ -354,6 +452,12 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     if sm_scale is None:
         sm_scale = head_dim**-0.5
 
+    candidates = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], device='cuda', dtype=torch.float32)
+    # candidate_E = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3], device='cuda', dtype=torch.int32)
+    # candidate_M = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device='cuda', dtype=torch.int32)
+
+    # import pdb; pdb.set_trace()
+    
     grid = ((qo_len + BLKQ - 1) // BLKQ, h_qo, b)
     quant_mxfp4_kernel[grid](
         q, q_fp4, q_scale, qo_len,
@@ -361,9 +465,11 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         stride_bz_qo, stride_h_qo, stride_seq_qo,
         q_scale.stride(0), q_scale.stride(1), q_scale.stride(2),
         sm_scale=(sm_scale * 1.44269504),
-        C=head_dim, BLK=BLKQ
+        C=head_dim, BLK=BLKQ,
+        candidates_ptr=candidates
+        # candidate_E_ptr=candidate_E, candidate_M_ptr=candidate_M
     )
-
+    
     grid = ((kv_len + BLKK - 1) // BLKK, h_kv, b)
     quant_mxfp4_kernel[grid](
         k, k_fp4, k_scale, kv_len,
@@ -371,7 +477,9 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         stride_bz_ko, stride_h_ko, stride_seq_ko,
         k_scale.stride(0), k_scale.stride(1), k_scale.stride(2),
         sm_scale=1.0,
-        C=head_dim, BLK=BLKK
+        C=head_dim, BLK=BLKK,   
+        candidates_ptr=candidates
+        # candidate_E_ptr=candidate_E, candidate_M_ptr=candidate_M
     )
 
     return q_fp4, q_scale, k_fp4, k_scale
