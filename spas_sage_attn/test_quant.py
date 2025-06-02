@@ -2,8 +2,8 @@ import torch
 from quant_per_block import per_block_int8
 from quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 
-from block_scaled_matmul_from_tensor import initialize_block_scaled_from_tensor, block_scaled_matmul
-from test_batched_matmul import initialize_block_scaled_batched_from_tensor, block_scaled_batched_matmul
+from block_scaled_matmul import initialize_block_scaled_from_tensor, block_scaled_matmul
+from batched_block_scaled_matmul import initialize_block_scaled_batched_from_tensor, block_scaled_batched_matmul
 
 def test_per_block_int8():
     # Set random seed for reproducibility

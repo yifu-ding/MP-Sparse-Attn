@@ -110,7 +110,7 @@ def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
                 # continue
             
         if start_n == lo or cur_qk_max >= sink_qk_max * skip_thresh: 
-            if STAGE == 2:
+            if STAGE == 2:   # is_causal
                 mask = offs_m[:, None] >= (start_n + offs_n[None, :])
                 qk = qk + tl.where(mask, 0, -1.0e6)
                 local_m = tl.max(qk, 1)
@@ -180,7 +180,7 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
                                     BLOCK_M, HEAD_DIM, BLOCK_N,  
                                     4 - STAGE, offs_m, offs_n, skip_thresh   # STAGE=1,3 --> 3,1
                                     )
-    if STAGE != 1:  # STAGE=3 --> STAGE=2
+    if STAGE != 1:  # STAGE=3 
         acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
                                        start_m,  
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  
