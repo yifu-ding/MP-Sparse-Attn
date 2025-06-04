@@ -41,7 +41,7 @@ def _matmul_launch_metadata(grid, kernel, args):
 
 
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def block_scaled_batched_matmul_kernel(  #
+def block_scaled_batched_attn_kernel(  #
         q_ptr, q_scale,  #
         k_ptr, k_scale,  #
         v_ori,
@@ -198,10 +198,11 @@ def block_scaled_batched_matmul_kernel(  #
     # tl.store(o_ptrs, accumulator.to(output_dtype), mask=c_mask)
 
     acc = acc / l_i[:, None]
-    tl.store(o_ptr, acc.to(output_dtype), mask = (offs_m[:, None] < qo_len))
+    o_ptrs = o_ptr + off_z * stride_ob + off_h * stride_oh + offs_m[:, None] * stride_om + offs_n[None, :] # * stride_on
+    tl.store(o_ptrs, acc.to(output_dtype), mask = (offs_m[:, None] < qo_len))
 
 
-def block_scaled_batched_matmul(a_desc, a_scale, b_desc, b_scale, v_ori, dtype_dst, B, H, M, N, K, configs, STAGE=1):
+def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori, dtype_dst, B, H, M, N, K, configs, STAGE=1):
     """
     支持多维批量矩阵乘法的函数
     
@@ -239,7 +240,7 @@ def block_scaled_batched_matmul(a_desc, a_scale, b_desc, b_scale, v_ori, dtype_d
     _, h_kv, kv_len, _ = b_desc.shape
     grid = (triton.cdiv(qo_len, BLOCK_M), H, B)
     
-    block_scaled_batched_matmul_kernel[grid](
+    block_scaled_batched_attn_kernel[grid](
         a_desc, a_scale, b_desc, b_scale, v_ori, output, M, N, K,
         # 输入矩阵A的stride: batch, head, M, K
         a_desc.stride(0), a_desc.stride(1), a_desc.stride(2), a_desc.stride(3),
@@ -403,6 +404,7 @@ def test_batched_matmul():
     torch.manual_seed(42)
     a_tensor = torch.randn(B, H, M, K, dtype=torch.float16, device='cuda') * 0.1
     b_tensor = torch.randn(B, H, N, K, dtype=torch.float16, device='cuda') * 0.1
+    v_ori = torch.randn(B, H, N, K, dtype=torch.float16, device='cuda') * 0.1
     
     # 计算VEC_SIZE
     VEC_SIZE = 32  # 对于mxfp8
@@ -429,8 +431,8 @@ def test_batched_matmul():
     print(f"  - b_scale形状: {b_scale_proc.shape}")
     
     # 执行多维批量矩阵乘法
-    output = block_scaled_batched_matmul(
-        a_desc, a_scale_proc, b_desc, b_scale_proc, 
+    output = block_scaled_batched_attn(
+        a_desc, a_scale_proc, b_desc, b_scale_proc, v_ori,
         torch.float16, B, H, M, N, K, configs
     )
     
@@ -490,7 +492,7 @@ def benchmark_batched_vs_sequential():
     
     # 预热
     for _ in range(3):
-        _ = block_scaled_batched_matmul(
+        _ = block_scaled_batched_attn(
             a_desc, a_scale_proc, b_desc, b_scale_proc, 
             torch.float16, B, H, M, N, K, configs
         )
@@ -500,7 +502,7 @@ def benchmark_batched_vs_sequential():
     import time
     start_time = time.time()
     for _ in range(num_runs):
-        output_batched = block_scaled_batched_matmul(
+        output_batched = block_scaled_batched_attn(
             a_desc, a_scale_proc, b_desc, b_scale_proc, 
             torch.float16, B, H, M, N, K, configs
         )
