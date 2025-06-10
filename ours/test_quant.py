@@ -1,5 +1,5 @@
 import torch
-from quant_per_block import per_block_int8
+from spas_sage_attn.quant_per_block import per_block_int8
 from quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 
 from block_scaled_matmul import initialize_block_scaled_from_tensor, block_scaled_matmul
