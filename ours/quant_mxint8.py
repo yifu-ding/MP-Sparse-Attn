@@ -345,7 +345,7 @@ def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
     # candidate_M = tl.load(candidate_M_ptr + idx)
 
     # 预定义候选值，避免重复计算
-    # candidates = tl.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], type=tl.float32)
+    candidates = tl.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], type=tl.float32)
     
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
@@ -388,8 +388,8 @@ def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
     
     # 逐个候选值计算，避免大的broadcast
     for i in tl.static_range(8):
-        # candidate_val = candidates[i]
-        candidate_val = tl.load(candidates_ptr + i)
+        candidate_val = candidates[i]
+        # candidate_val = tl.load(candidates_ptr + i)
         # candidate_val = i
         current_error = tl.abs(abs_x - candidate_val)
         

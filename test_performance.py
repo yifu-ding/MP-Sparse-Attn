@@ -1,14 +1,14 @@
 import torch
 import time
-from spas_sage_attn import spas_sage_attn_meansim_cuda
-from spas_sage_attn.utils import get_block_map_meansim
-from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_block_int8, forward as forward_triton
-from flash_attn.flash_attn_triton import flash_attn_func
+# from spas_sage_attn import spas_sage_attn_meansim_cuda
+# from spas_sage_attn.utils import get_block_map_meansim
+# from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_block_int8, forward as forward_triton
+# from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
 from ours.mxfp_attn_kernel import mxfp_attn_kernel
 
 
-iter_times = 100
+iter_times = 1000
 def measure_time(func, *args, **kwargs):
     # warmup
     for _ in range(3):
@@ -68,53 +68,53 @@ def test_performance():
     #             exit()
     
     
-    k_block_indices, time_block_map = measure_time(
-        get_block_map_meansim, q, k, is_causal=False, simthreshd1=simthreshd, cdfthreshd=cdfthreshd
-    )
+    # k_block_indices, time_block_map = measure_time(
+    #     get_block_map_meansim, q, k, is_causal=False, simthreshd1=simthreshd, cdfthreshd=cdfthreshd
+    # )
 
-    sparsity = k_block_indices.flatten().sum() / k_block_indices.numel()
-    print(f"sparsity={sparsity}")
+    # sparsity = k_block_indices.flatten().sum() / k_block_indices.numel()
+    # print(f"sparsity={sparsity}")
     
-    # import pdb; pdb.set_trace()
-    (q_int8, q_scale, k_int8, k_scale), time_int8 = measure_time(
-        per_block_int8, q, k
-    )
+    # # import pdb; pdb.set_trace()
+    # (q_int8, q_scale, k_int8, k_scale), time_int8 = measure_time(
+    #     per_block_int8, q, k
+    # )
     
-    pvthreshd = torch.tensor([50.0], device='cuda')
-    output, time_forward = measure_time(
-        forward_triton, q_int8, k_int8, k_block_indices, v, q_scale, k_scale, pvthreshd,
-        is_causal=False, tensor_layout="HND", output_dtype=torch.float16
-    )
+    # pvthreshd = torch.tensor([50.0], device='cuda')
+    # output, time_forward = measure_time(
+    #     forward_triton, q_int8, k_int8, k_block_indices, v, q_scale, k_scale, pvthreshd,
+    #     is_causal=False, tensor_layout="HND", output_dtype=torch.float16
+    # )
     
     
     # 总时间
     print("testing mxfp_attn_kernel...")
     out_mxfp, time_total_mxfp = measure_time(
-        mxfp_attn_kernel, q, k, v, is_causal=False, block_scale_type="mxfp8"
+        mxfp_attn_kernel, q, k, v, is_causal=False, block_scale_type="mxfp4"
     )   
     
     
-    print("testing spas_sage_attn_meansim...")
-    out_spas, time_total_spas = measure_time(
-        spas_sage_attn_meansim, q, k, v, is_causal=False, simthreshd1=simthreshd, cdfthreshd=cdfthreshd
-    )
+    # print("testing spas_sage_attn_meansim...")
+    # out_spas, time_total_spas = measure_time(
+    #     spas_sage_attn_meansim, q, k, v, is_causal=False, simthreshd1=simthreshd, cdfthreshd=cdfthreshd
+    # )
     
-    print("testing spas_sage_attn_meansim...")
-    out_spas_full, time_total_spas_full = measure_time(
-        spas_sage_attn_meansim, q, k, v, is_causal=False, simthreshd1=0.1, cdfthreshd=0.9
-    )
+    # print("testing spas_sage_attn_meansim...")
+    # out_spas_full, time_total_spas_full = measure_time(
+    #     spas_sage_attn_meansim, q, k, v, is_causal=False, simthreshd1=0.1, cdfthreshd=0.9
+    # )
 
-    # 测试 spas_sage_attn_meansim_cuda
-    print("testing spas_sage_attn_meansim_cuda...")
-    (out_spas_cuda, qk_sparsity), time_total_spas_cuda = measure_time(
-        spas_sage_attn_meansim_cuda, q, k, v, is_causal=False, simthreshd1=simthreshd, cdfthreshd=cdfthreshd, return_sparsity=True
-    )
-    print(f"qk_sparsity={qk_sparsity}")
+    # # 测试 spas_sage_attn_meansim_cuda
+    # print("testing spas_sage_attn_meansim_cuda...")
+    # (out_spas_cuda, qk_sparsity), time_total_spas_cuda = measure_time(
+    #     spas_sage_attn_meansim_cuda, q, k, v, is_causal=False, simthreshd1=simthreshd, cdfthreshd=cdfthreshd, return_sparsity=True
+    # )
+    # print(f"qk_sparsity={qk_sparsity}")
     
-    (out_spas_cuda_full, qk_sparsity), time_total_spas_cuda_full = measure_time(
-        spas_sage_attn_meansim_cuda, q, k, v, is_causal=False, simthreshd1=0.1, cdfthreshd=0.9, return_sparsity=True
-    )
-    print(f"qk_sparsity_full={qk_sparsity}")
+    # (out_spas_cuda_full, qk_sparsity), time_total_spas_cuda_full = measure_time(
+    #     spas_sage_attn_meansim_cuda, q, k, v, is_causal=False, simthreshd1=0.1, cdfthreshd=0.9, return_sparsity=True
+    # )
+    # print(f"qk_sparsity_full={qk_sparsity}")
     
     # 测试 torch.nn.functional.scaled_dot_product_attention
     print("testing torch.nn.functional.scaled_dot_product_attention...")
@@ -131,72 +131,72 @@ def test_performance():
     )
     
     # 测试 flash-attention triton
-    print("testing flash-attention triton...")
-    def test_flash_attn_triton(q, k, v, is_causal=False):
-        out = torch.empty_like(q)
-        # 准备metadata
-        # metadata = type('Metadata', (), {
-        #     'sm_scale': 1.0 / (head_dim ** 0.5),
-        #     'alibi_slopes': None,
-        #     'causal': is_causal,
-        #     'layout': 'HND',
-        #     'cu_seqlens_q': torch.tensor([0, seq_len], device='cuda', dtype=torch.int32),
-        #     'cu_seqlens_k': torch.tensor([0, seq_len], device='cuda', dtype=torch.int32),
-        #     'max_seqlens_q': seq_len,
-        #     'max_seqlens_k': seq_len,
-        #     'cache_seqlens': None,
-        #     'cache_batch_idx': None,
-        #     'dropout_p': 0.0,
-        #     'philox_seed': 0,
-        #     'philox_offset': 0,
-        #     'return_scores': False,
-        #     'use_exp2': False
-        # })
+    # print("testing flash-attention triton...")
+    # def test_flash_attn_triton(q, k, v, is_causal=False):
+    #     out = torch.empty_like(q)
+    #     # 准备metadata
+    #     # metadata = type('Metadata', (), {
+    #     #     'sm_scale': 1.0 / (head_dim ** 0.5),
+    #     #     'alibi_slopes': None,
+    #     #     'causal': is_causal,
+    #     #     'layout': 'HND',
+    #     #     'cu_seqlens_q': torch.tensor([0, seq_len], device='cuda', dtype=torch.int32),
+    #     #     'cu_seqlens_k': torch.tensor([0, seq_len], device='cuda', dtype=torch.int32),
+    #     #     'max_seqlens_q': seq_len,
+    #     #     'max_seqlens_k': seq_len,
+    #     #     'cache_seqlens': None,
+    #     #     'cache_batch_idx': None,
+    #     #     'dropout_p': 0.0,
+    #     #     'philox_seed': 0,
+    #     #     'philox_offset': 0,
+    #     #     'return_scores': False,
+    #     #     'use_exp2': False
+    #     # })
         
-        out = flash_attn_func(
-            q, k, v,
-            None,
-            is_causal,
-            1.0 / (head_dim ** 0.5)
-        )
-        return out
+    #     out = flash_attn_func(
+    #         q, k, v,
+    #         None,
+    #         is_causal,
+    #         1.0 / (head_dim ** 0.5)
+    #     )
+    #     return out
     
-    out_fa, time_total_flash = measure_time(
-        test_flash_attn_triton, q, k, v, is_causal=False
-    )
+    # out_fa, time_total_flash = measure_time(
+    #     test_flash_attn_triton, q, k, v, is_causal=False
+    # )
     
     # 打印结果
     print(f"\n{'性能测试结果':=^50}")
     print(f"**** Shape ****\nbatch_size: {batch_size}, num_heads: {num_heads}, seq_len: {seq_len}, head_dim: {head_dim}")
-    print("**** spas_sage_attn_meansim (triton) kernel 分析 ****")
-    print(f"get_block_map_meansim: {time_block_map:.2f} ms ({time_block_map/time_total_spas*100:.2f}%)")
-    print(f"per_block_int8: {time_int8:.2f} ms ({time_int8/time_total_spas*100:.2f}%)")
-    print(f"forward: {time_forward:.2f} ms ({time_forward/time_total_spas*100:.2f}%), average time: {time_forward/iter_times:.2f} ms")
+    # print("**** spas_sage_attn_meansim (triton) kernel 分析 ****")
+    # print(f"get_block_map_meansim: {time_block_map:.2f} ms ({time_block_map/time_total_spas*100:.2f}%)")
+    # print(f"per_block_int8: {time_int8:.2f} ms ({time_int8/time_total_spas*100:.2f}%)")
+    # print(f"forward: {time_forward:.2f} ms ({time_forward/time_total_spas*100:.2f}%), average time: {time_forward/iter_times:.2f} ms")
     
-    print("**** 总体算子时间对比 ****")
-    print(f"mxfp_attn_kernel (triton): {time_total_mxfp:.2f} ms ({time_total_mxfp/time_total_spas*100:.2f}%), average time: {time_total_mxfp/iter_times:.2f} ms")
-    print(f"\nspas (triton): {time_total_spas:.2f} ms, average time: {time_total_spas/iter_times:.2f} ms")
-    print(f"spas_full (triton): {time_total_spas_full:.2f} ms, average time: {time_total_spas_full/iter_times:.2f} ms")
+    # print("**** 总体算子时间对比 ****")
+    print(f"mxfp_attn_kernel (triton): {time_total_mxfp:.2f} ms, average time: {time_total_mxfp/iter_times:.2f} ms")
+    # print(f"\nspas (triton): {time_total_spas:.2f} ms, average time: {time_total_spas/iter_times:.2f} ms")
+    # print(f"spas_full (triton): {time_total_spas_full:.2f} ms, average time: {time_total_spas_full/iter_times:.2f} ms")
     
-    print(f"spas_sage_attn_meansim_cuda (cuda): {time_total_spas_cuda:.2f} ms, average time: {time_total_spas_cuda/iter_times:.2f} ms")
-    print(f"spas_sage_attn_meansim_cuda_full (cuda): {time_total_spas_cuda_full:.2f} ms, average time: {time_total_spas_cuda_full/iter_times:.2f} ms")
+    # print(f"spas_sage_attn_meansim_cuda (cuda): {time_total_spas_cuda:.2f} ms, average time: {time_total_spas_cuda/iter_times:.2f} ms")
+    # print(f"spas_sage_attn_meansim_cuda_full (cuda): {time_total_spas_cuda_full:.2f} ms, average time: {time_total_spas_cuda_full/iter_times:.2f} ms")
     
     print(f"torch.nn.functional.scaled_dot_product_attention (torch): {time_total_sdpa:.2f} ms, average time: {time_total_sdpa/iter_times:.2f} ms")
-    print(f"flash-attention (triton): {time_total_flash:.2f} ms, average time: {time_total_flash/iter_times:.2f} ms")
+    # print(f"flash-attention (triton): {time_total_flash:.2f} ms, average time: {time_total_flash/iter_times:.2f} ms")
     
     # 计算mse
     mse_mxfp = torch.nn.functional.mse_loss(out_mxfp, out_torch)
-    mse_spas = torch.nn.functional.mse_loss(out_spas, out_torch)
-    mse_spas_full = torch.nn.functional.mse_loss(out_spas_full, out_torch)
-    mse_spas_cuda = torch.nn.functional.mse_loss(out_spas_cuda, out_torch)
-    mse_spas_cuda_full = torch.nn.functional.mse_loss(out_spas_cuda_full, out_torch)   
-    mse_fa = torch.nn.functional.mse_loss(out_fa, out_torch)
+    # mse_spas = torch.nn.functional.mse_loss(out_spas, out_torch)
+    # mse_spas_full = torch.nn.functional.mse_loss(out_spas_full, out_torch)
+    # mse_spas_cuda = torch.nn.functional.mse_loss(out_spas_cuda, out_torch)
+    # mse_spas_cuda_full = torch.nn.functional.mse_loss(out_spas_cuda_full, out_torch)   
+    # mse_fa = torch.nn.functional.mse_loss(out_fa, out_torch)
     
     # import pdb; pdb.set_trace()
     print(f"mse_mxfp: {mse_mxfp:.6f}")
-    print(f"mse_spas: {mse_spas:.6f}, mse_spas_full: {mse_spas_full:.6f}")
-    print(f"mse_spas_cuda: {mse_spas_cuda:.6f}, mse_spas_cuda_full: {mse_spas_cuda_full:.6f}")
-    print(f"mse_fa: {mse_fa:.6f}")
+    # print(f"mse_spas: {mse_spas:.6f}, mse_spas_full: {mse_spas_full:.6f}")
+    # print(f"mse_spas_cuda: {mse_spas_cuda:.6f}, mse_spas_cuda_full: {mse_spas_cuda_full:.6f}")
+    # print(f"mse_fa: {mse_fa:.6f}")
 
 if __name__ == "__main__":
     test_performance() 
