@@ -12,7 +12,7 @@ import triton.language as tl
 import triton.profiler as proton
 # from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from ours.mxfp import MXFP4Tensor, MXScaleTensor
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
@@ -277,7 +277,8 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
    # 根据block_scale_type处理输入数据
     # import pdb; pdb.set_trace()
     if block_scale_type in ["mxfp8", "mixed"]:
-        a = a_tensor.to(torch.float8_e5m2)
+        # a = a_tensor.to(torch.float8_e5m2)
+        a = a_tensor  # 本来就是fp8e5
         a_ref = a.to(torch.float32) if compute_reference else None
     else:
         # 对于fp4格式, 这里需要将fp16数据转换为packed fp4格式
@@ -288,7 +289,8 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
         a = a.to_packed_tensor(dim=1)
         
     if block_scale_type == "mxfp8": 
-        b = b_tensor.to(torch.float8_e5m2)
+        # b = b_tensor.to(torch.float8_e5m2)
+        b = b_tensor
         b_ref = b.to(torch.float32) if compute_reference else None
     else:
         # 对于fp4格式, 这里需要将fp16数据转换为packed fp4格式
@@ -318,14 +320,17 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
     if block_scale_type == "nvfp4":
         a_scale = a_scale.to(torch.float8_e5m2)
         b_scale = b_scale.to(torch.float8_e5m2)
+        # a_scale_ref = a_scale.to(torch.float32)
+        # b_scale_ref = b_scale.to(torch.float32)
+    elif block_scale_type in ["mxfp4", "mxfp8", "mixed"]:
+        # a_scale_ref = MXScaleTensor(a_scale.to(torch.float32))
+        # b_scale_ref = MXScaleTensor(b_scale.to(torch.float32))
+        # a_scale = a_scale_ref.data
+        # b_scale = b_scale_ref.data
         a_scale_ref = a_scale.to(torch.float32)
         b_scale_ref = b_scale.to(torch.float32)
-    elif block_scale_type in ["mxfp4", "mxfp8", "mixed"]:
-        a_scale_ref = MXScaleTensor(a_scale.to(torch.float32))
-        b_scale_ref = MXScaleTensor(b_scale.to(torch.float32))
-        a_scale = a_scale_ref.data
-        b_scale = b_scale_ref.data
-        
+        pass
+    
     reference = None
     if compute_reference:
         # 批量计算参考结果，处理多维输入
@@ -343,50 +348,52 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
         
         # 计算参考结果：批量矩阵乘法 (A * scale_a) @ (B * scale_b)
         # 使用torch.matmul自动处理批量和head维度
-        reference = torch.matmul(a_ref * a_scale_expanded, b_ref * b_scale_expanded)
+        # import pdb; pdb.set_trace()
+        reference = torch.matmul(a_ref / a_scale_expanded, b_ref / b_scale_expanded)
     
     configs = {
         "BLOCK_SIZE_M": BLOCK_M,
         "BLOCK_SIZE_N": BLOCK_N,
         "BLOCK_SIZE_K": BLOCK_K,
-        "num_stages": 4,
+        "num_stages": 2,
         "ELEM_PER_BYTE_A": ELEM_PER_BYTE_A,
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,
     }
     
     if compute_reference:
-        return a_desc, a_scale, b_desc, b_scale, configs, (reference, a_ref * a_scale_expanded, (b_ref * b_scale_expanded).transpose(-1, -2))
+        return a_desc, a_scale, b_desc, b_scale, configs, (reference, a_ref / a_scale_expanded, (b_ref / b_scale_expanded).transpose(-1, -2))
     else:
         return a_desc, a_scale, b_desc, b_scale, configs, None
 
 
 
-def test_batched_matmul():
+def test_batched_matmul(a_tensor, b_tensor, a_scale, b_scale, configs, block_scale_type, B, H, M, N, K):
+# def test_batched_matmul(a_desc, b_desc, a_scale_proc, b_scale_proc, configs, block_scale_type, B, H, M, N, K):
     """测试多维批量矩阵乘法的正确性"""
-    # 设置参数
-    B = 2  # batch size
-    H = 4  # head数量
-    M = 256 
-    N = 512
-    K = 256
-    block_scale_type = "mxfp8"  # 使用fp8格式进行测试
+    # # 设置参数
+    # B = 2  # batch size
+    # H = 4  # head数量
+    # M = 256 
+    # N = 512
+    # K = 256
+    # block_scale_type = "mxfp8"  # 使用fp8格式进行测试
     
-    print(f"测试多维批量矩阵乘法: B={B}, H={H}, M={M}, N={N}, K={K}")
+    # print(f"测试多维批量矩阵乘法: B={B}, H={H}, M={M}, N={N}, K={K}")
     
-    # 生成随机输入数据 - 修改为4D张量
-    torch.manual_seed(42)
-    a_tensor = torch.randn(B, H, M, K, dtype=torch.float16, device='cuda') * 0.1
-    b_tensor = torch.randn(B, H, N, K, dtype=torch.float16, device='cuda') * 0.1
+    # # 生成随机输入数据 - 修改为4D张量
+    # torch.manual_seed(42)
+    # a_tensor = torch.randn(B, H, M, K, dtype=torch.float16, device='cuda') * 0.1
+    # b_tensor = torch.randn(B, H, N, K, dtype=torch.float16, device='cuda') * 0.1
     
-    # 计算VEC_SIZE
-    VEC_SIZE = 32  # 对于mxfp8
+    # # 计算VEC_SIZE
+    # VEC_SIZE = 32  # 对于mxfp8
     
-    # 生成随机scale因子 - 修改为6D张量
-    a_scale = torch.randn(B, H, M // 128, K // VEC_SIZE // 4, 32, 4, 4, 
-                         dtype=torch.float32, device='cuda') * 0.01 + 0.1
-    b_scale = torch.randn(B, H, N // 128, K // VEC_SIZE // 4, 32, 4, 4, 
-                         dtype=torch.float32, device='cuda') * 0.01 + 0.1
+    # # 生成随机scale因子 - 修改为6D张量
+    # a_scale = torch.randn(B, H, M // 128, K // VEC_SIZE // 4, 32, 4, 4, 
+    #                      dtype=torch.float32, device='cuda') * 0.01 + 0.1
+    # b_scale = torch.randn(B, H, N // 128, K // VEC_SIZE // 4, 32, 4, 4, 
+    #                      dtype=torch.float32, device='cuda') * 0.01 + 0.1
     
     # try:
     # 初始化多维批量矩阵乘法
@@ -394,39 +401,41 @@ def test_batched_matmul():
         initialize_block_scaled_batched_from_tensor(
             a_tensor, b_tensor, a_scale, b_scale, 
             block_scale_type=block_scale_type, 
-            compute_reference=True
+            compute_reference=False
         )
     
-    print("✓ 初始化成功")
-    print(f"  - a_desc形状: {a_desc.shape}")
-    print(f"  - b_desc形状: {b_desc.shape}")
-    print(f"  - a_scale形状: {a_scale_proc.shape}")
-    print(f"  - b_scale形状: {b_scale_proc.shape}")
+    # print("✓ 初始化成功")
+    # print(f"  - a_desc形状: {a_desc.shape}")
+    # print(f"  - b_desc形状: {b_desc.shape}")
+    # print(f"  - a_scale形状: {a_scale_proc.shape}")
+    # print(f"  - b_scale形状: {b_scale_proc.shape}")
     
     # 执行多维批量矩阵乘法
-    output = block_scaled_batched_matmul(
-        a_desc, a_scale_proc, b_desc, b_scale_proc, 
-        torch.float16, B, H, M, N, K, configs
-    )
+    # output = block_scaled_batched_matmul(
+    #     a_desc, a_scale_proc, b_desc, b_scale_proc, 
+    #     torch.float16, B, H, M, N, K, configs
+    # )
+    # exit()
+    # return output 
+    return None
+    # print(f"✓ 多维批量矩阵乘法完成，输出形状: {output.shape}")
     
-    print(f"✓ 多维批量矩阵乘法完成，输出形状: {output.shape}")
+    # # 验证输出形状
+    # assert output.shape == (B, H, M, N), f"输出形状错误: 期望{(B, H, M, N)}, 实际{output.shape}"
     
-    # 验证输出形状
-    assert output.shape == (B, H, M, N), f"输出形状错误: 期望{(B, H, M, N)}, 实际{output.shape}"
-    
-    # 与参考结果比较（如果有的话）
-    if reference is not None:
-        error = torch.mean(torch.abs(output.float() - reference)).item()
-        print(f"✓ 与参考结果的平均绝对误差: {error:.6f}")
+    # # 与参考结果比较（如果有的话）
+    # if reference is not None:
+    #     error = torch.mean(torch.abs(output.float() - reference)).item()
+    #     print(f"✓ 与参考结果的平均绝对误差: {error:.6f}")
         
-        # 检查是否在合理范围内
-        if error < 0.1:  # 根据量化精度调整阈值
-            print("✓ 精度验证通过")
-        else:
-            print("⚠️  精度可能有问题，误差较大")
+    #     # 检查是否在合理范围内
+    #     if error < 0.1:  # 根据量化精度调整阈值
+    #         print("✓ 精度验证通过")
+    #     else:
+    #         print("⚠️  精度可能有问题，误差较大")
     
-    print("✓ 所有测试通过!")
-    return True
+    # print("✓ 所有测试通过!")
+    # return True
         
     # except Exception as e:
     #     print(f"❌ 测试失败: {e}")

@@ -207,8 +207,18 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     # 6. 存储量化后的值和scale
     x_fp8 = tl.reshape(x_quant, x.shape)
     tl.store(output_ptrs, x_fp8, mask=offs_n[:, None] < L)
-    tl.store(scale_ptrs, shared_scale)
+    
+    # 存储scale
+    # is_invalid = torch.isnan(shared_scale) | torch.isinf(shared_scale) | (shared_scale <= 0)
+    # tl.store(scale_ptrs, 255, mask = ~is_invalid)
+    # valid_values = shared_scale[~is_invalid]
+    e = tl.floor(tl.log2(shared_scale))
+    e_biased = e + 127
+    # e_biased_int = e_biased
+    e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
+    tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8))
 
+    # tl.store(scale_ptrs, shared_scale)
 
 def quant_mxfp8e5(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     q_fp8 = torch.empty(q.shape, dtype=torch.float8_e5m2, device=q.device)
@@ -233,8 +243,8 @@ def quant_mxfp8e5(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     else:
         raise ValueError(f"Unknown tensor layout: {tensor_layout}")
 
-    q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.float32)
-    k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.float32)
+    q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.uint8)
+    k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.uint8)
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
@@ -328,8 +338,20 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     # 6. 存储量化后的值和scale
     x_uint8 = tl.reshape(x_quant, x.shape)
     tl.store(output_ptrs, x_uint8, mask=offs_n[:, None] < L)
-    tl.store(scale_ptrs, shared_scale)
+    # tl.store(scale_ptrs, shared_scale)
+    
+    # 存储scale
+    # is_invalid = torch.isnan(shared_scale) | torch.isinf(shared_scale) | (shared_scale <= 0)
+    # tl.store(scale_ptrs, 255, mask = ~is_invalid)
+    # valid_values = shared_scale[~is_invalid]
+    e = tl.floor(tl.log2(shared_scale))
+    e_biased = e + 127
+    # e_biased_int = e_biased
+    e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
+    tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8))
 
+
+# 没用上
 @triton.jit
 def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
                     stride_iz, stride_ih, stride_in,
@@ -346,7 +368,7 @@ def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
 
     # 预定义候选值，避免重复计算
     candidates = tl.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], type=tl.float32)
-    
+
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
     off_b = tl.program_id(2)
@@ -451,13 +473,13 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     else:
         raise ValueError(f"Unknown tensor layout: {tensor_layout}")
 
-    q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.float32)
-    k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.float32)
+    q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.uint8)
+    k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.uint8)
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
 
-    candidates = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], device='cuda', dtype=torch.float32)
+    # candidates = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], device='cuda', dtype=torch.float32)
     # candidate_E = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3], device='cuda', dtype=torch.int32)
     # candidate_M = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1], device='cuda', dtype=torch.int32)
 
@@ -471,7 +493,7 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         q_scale.stride(0), q_scale.stride(1), q_scale.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        candidates_ptr=candidates
+        # candidates_ptr=candidates
         # candidate_E_ptr=candidate_E, candidate_M_ptr=candidate_M
     )
     
@@ -483,7 +505,7 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         k_scale.stride(0), k_scale.stride(1), k_scale.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
-        candidates_ptr=candidates
+        # candidates_ptr=candidates
         # candidate_E_ptr=candidate_E, candidate_M_ptr=candidate_M
     )
 

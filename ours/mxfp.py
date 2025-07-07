@@ -78,6 +78,7 @@ class MXFP4Tensor:
 
     def _from_uint8(self, data):
         #  ((S << 3) | (E << 1) | M).type(torch.uint8)
+        assert data.dtype == torch.uint8, "data must be uint8, but got {}".format(data.dtype)
         return data
 
     def _from_float(self, values):
