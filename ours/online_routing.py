@@ -18,8 +18,8 @@ import torch, math
 import triton
 import triton.language as tl
 import torch.nn.functional as F
-from spas_sage_attn.utils import hyperparameter_check, get_block_map_meansim
-from spas_sage_attn.quant_per_block import per_block_int8
+# from spas_sage_attn.utils import hyperparameter_check, get_block_map_meansim
+# from spas_sage_attn.quant_per_block import per_block_int8
 import pdb
 
 

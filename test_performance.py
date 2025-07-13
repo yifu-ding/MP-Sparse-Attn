@@ -9,7 +9,7 @@ from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
 from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor    
 from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 
-iter_times = 500
+iter_times = 5
 def measure_time(func, *args, **kwargs):
     # warmup
     for _ in range(3):
@@ -36,8 +36,8 @@ def test_performance():
     
     # 创建测试数据
     batch_size = 1
-    num_heads = 24
-    seq_len = 1024
+    num_heads = 4
+    seq_len = 512
     head_dim = 128
     
     q = torch.randn(batch_size, num_heads, seq_len, head_dim, device='cuda', dtype=torch.float16)
@@ -111,7 +111,7 @@ def test_performance():
     
     # 总时间
     # print("testing mxfp_attn_kernel...")
-    block_scale_type = "mxfp4" 
+    block_scale_type = "mxfp8" 
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
         mxfp_attn_kernel, q, k, v, is_causal=False, block_scale_type=block_scale_type, skip_thresh=10
@@ -238,7 +238,7 @@ def test_performance():
     # print(f"forward: {time_forward:.4f} ms ({time_forward/time_total_spas*100:.4f}%), average time: {time_forward/iter_times:.4f} ms")
     
     # print("**** 总体算子时间对比 ****")
-    print(f"mxfp_attn_kernel (triton) total: {time_total_mxfp:.4f} ms, average time: {time_total_mxfp/iter_times:.4f} ms")
+    print(f"mxfp_attn_kernel ({block_scale_type} triton) total: {time_total_mxfp:.4f} ms, average time: {time_total_mxfp/iter_times:.4f} ms")
     # print(f"mxfp_attn_kernel (triton) quant: {time_step_quant_mxfp:.4f} ms, average time: {time_step_quant_mxfp/iter_times:.4f} ms")
     # print(f"mxfp_attn_kernel (triton) init: {time_step_mxfp_init:.4f} ms, average time: {time_step_mxfp_init/iter_times:.4f} ms")
     # print(f"mxfp_attn_kernel (triton) attn: {time_step_mxfp_attn:.4f} ms, average time: {time_step_mxfp_attn/iter_times:.4f} ms")
@@ -264,7 +264,7 @@ def test_performance():
     
     # import pdb; pdb.set_trace()
     if mse_mxfp is not None:
-        print(f"mse_mxfp: {mse_mxfp:.6f}")
+        print(f"mse_mxfp {block_scale_type}: {mse_mxfp:.6f}")
     # print(f"mse_spas: {mse_spas:.6f}, mse_spas_full: {mse_spas_full:.6f}")
     # print(f"mse_spas_cuda: {mse_spas_cuda:.6f}, mse_spas_cuda_full: {mse_spas_cuda_full:.6f}")
     # print(f"mse_fa: {mse_fa:.6f}")

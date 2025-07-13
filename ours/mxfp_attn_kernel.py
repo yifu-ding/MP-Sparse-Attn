@@ -33,7 +33,8 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     if smooth_k:
         k = k - k.mean(dim=-2, keepdim=True)
 
-    B, H, M, K = q.shape
+    B, H, M, K = q.shape  # torch.Size([1, 24, 31409, 128])
+    import pdb; pdb.set_trace() 
     N = k.shape[2]
 
     assert K in [64, 128], "headdim should be in [64, 128]."
@@ -43,7 +44,7 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
         a_fp4, a_scale, b_fp4, b_scale = quant_mxfp4(q, k, BLKQ=BLKQ)
         a_quant = a_fp4
         b_quant = b_fp4
-    else:
+    elif block_scale_type == "mxfp8":
         a_fp8, a_scale, b_fp8, b_scale = quant_mxfp8e5(q, k, BLKQ=BLKQ)
         a_quant = a_fp8
         b_quant = b_fp8
@@ -51,10 +52,43 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     # BLOCK_K = 256 if "fp4" in block_scale_type else 128
     VEC_SIZE = 16 if block_scale_type == "nvfp4" else 32
 
-    a_quant = a_quant.reshape(B, H, M, K).contiguous()
+    a_quant = a_quant.reshape(B, H, M, K).contiguous()  # torch.Size([1, 4, 512, 128])
     b_quant = b_quant.reshape(B, H, N, K).contiguous()
-    a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
-    b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
+    
+    # 扩展 a_scale 和 b_scale 的第2维度为128的倍数
+    M_padded = ((M + 127) // 128) * 128  # 向上取整到128的倍数
+    N_padded = ((N + 127) // 128) * 128  # 向上取整到128的倍数
+    
+    # 扩展 a_scale
+    if M_padded > M:
+        # 计算需要填充的大小
+        pad_size = M_padded - M
+        # 创建新的tensor，用零填充
+        a_scale_padded = torch.zeros(B, H, M_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=a_scale.device, dtype=a_scale.dtype)
+        # 复制原始数据
+        a_scale_padded[:, :, :M//128, :, :, :, :] = a_scale
+        a_scale = a_scale_padded
+    else:
+        a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4)
+    
+    # 扩展 b_scale
+    if N_padded > N:
+        # 计算需要填充的大小
+        pad_size = N_padded - N
+        # 创建新的tensor，用零填充
+        b_scale_padded = torch.zeros(B, H, N_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=b_scale.device, dtype=b_scale.dtype)
+        # 复制原始数据
+        b_scale_padded[:, :, :N//128, :, :, :, :] = b_scale
+        b_scale = b_scale_padded
+    else:
+        b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4)
+    
+    # 应用permute操作
+    a_scale = a_scale.permute(0, 1, 2, 5, 4, 3, 6).contiguous()
+    b_scale = b_scale.permute(0, 1, 2, 5, 4, 3, 6).contiguous()
+    
+    # a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous() # torch.Size([1, 4, 4, 1, 32, 4, 4])
+    # b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
     
     a_packed, a_scale, b_packed, b_scale, configs, (reference, a_dequant, b_dequant) = \
         initialize_block_scaled_batched_from_tensor(a_quant, b_quant, a_scale, b_scale, block_scale_type=block_scale_type, compute_reference=False)
@@ -711,11 +745,11 @@ def benchmark_batched_vs_sequential():
     
     return batched_time
 
-if __name__ == "__main__":
-    print("开始测试多维批量矩阵乘法实现...")
+# if __name__ == "__main__":
+#     print("开始测试多维批量矩阵乘法实现...")
     
-    # 基本功能测试
-    success = test_batched_attn()
+#     # 基本功能测试
+#     success = test_batched_attn()
     
     # if success:
     #     # 性能测试

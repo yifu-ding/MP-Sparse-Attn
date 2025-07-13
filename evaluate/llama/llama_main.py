@@ -3,11 +3,11 @@ os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 from init_llama import init_llama_model
 import argparse
-from modify_sparse_attn import set_spas_sage_attn_llama
-from spas_sage_attn.autotune import (
-    extract_sparse_attention_state_dict,
-    load_sparse_attention_state_dict,
-)
+# from modify_sparse_attn import set_spas_sage_attn_llama
+# from spas_sage_attn.autotune import (
+#     extract_sparse_attention_state_dict,
+#     load_sparse_attention_state_dict,
+# )
 import torch
 import numpy as np
 import random
@@ -16,11 +16,11 @@ import gc
 from tqdm import tqdm
 import wandb
 
+from ours.modify_mxfp_attn import set_mxfp_attn_llama
 from evaluate.datasets.text.longbench.pred import build_chat, get_pred, get_pred_speedup
 from datasets import load_dataset
 from evaluate.datasets.text.longbench.eval import scorer_e, scorer
 # import torch.multiprocessing as mp
-
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -66,13 +66,15 @@ def main():
     # our method
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
     parser.add_argument('--kernel_name', type=str, default=None, help="kernel name")
-
+    parser.add_argument('--mxfp_bw', type=str, default=None, help="mxfp bw")
     
+
     # 解析参数
     args = parser.parse_args()
     assert args.test_accuracy or args.test_speedup, "must choose one of test_accuracy or test_speedup"
     if args.test_accuracy: print("***** test accuracy *****")
     if args.test_speedup: print(f"***** test speedup on {args.num_fewshots} samples *****")
+    assert args.mxfp_bw in ["mxfp4", "mxfp8"], "mxfp_bw must be in [mxfp4, mxfp8]"
     
     print(f"***** args: {args} *****")
     
@@ -85,6 +87,8 @@ def main():
             wandb_name = f"{args.model}-{args.kernel_name}-{args.skip_thresh}-{args.num_fewshots}shots-{args.test_dataset_name}"
         elif "spargeattn" in args.kernel_name:
             wandb_name = f"{args.model}-{args.kernel_name}-{args.l1}-{args.pv_l1}-{args.num_fewshots}shots-{args.test_dataset_name}"
+        elif args.kernel_name == "mxfp_attn":
+            wandb_name = f"{args.model}-{args.kernel_name}-{args.mxfp_bw}-{args.num_fewshots}shots-{args.test_dataset_name}"
         else:
             wandb_name = f"{args.model}-naive-{args.num_fewshots}shots-{args.test_dataset_name}"
         run = wandb.init(project='mp-sparse', name=wandb_name, entity='eveedyf-google')
@@ -210,6 +214,9 @@ def main():
     elif args.kernel_name == "online_routing":
         set_spas_sage_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name)
         print("replace outline_routing!")
+    elif args.kernel_name == "mxfp_attn":
+        set_mxfp_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw)
+        print(f"replace mxfp_attn {args.mxfp_bw}!")
     else:
         print("use the original transformer attention!")
         

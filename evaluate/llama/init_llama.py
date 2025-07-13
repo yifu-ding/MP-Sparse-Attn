@@ -23,10 +23,10 @@ def init_llama_model(model_path="", device="cuda"):
         tokenizer: 对应的分词器
     """
     
-    model_path = resolve_snapshot(model_path)
+    # model_path = resolve_snapshot(model_path)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, local_files_only=True)
-    model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, local_files_only=False)
+    model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=False)
     
     model = model.to(device)
     model = model.bfloat16()

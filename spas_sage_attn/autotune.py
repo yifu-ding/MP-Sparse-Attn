@@ -26,6 +26,7 @@ from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim
 import warnings
 from einops import rearrange
 from ours.online_routing import online_routing_attn
+from ours.mxfp_attn_kernel import mxfp_attn_kernel
 
 def extract_sparse_attention_state_dict(model, verbose=False):
     saved_state_dict = {}
@@ -79,7 +80,7 @@ executor = GPUProcessPoolExecutor()
 
 class SparseAttentionMeansim(nn.Module):
     def __init__(self, sim_rule="l1", l1=0.07, pv_l1=0.08, cos_sim=0.98, rmse=0.07, rearrange_kwargs={}, tune_pv=True, 
-                 layer_idx=-1, verbose=False, kernel_name=None, skip_thresh=None):
+                 layer_idx=-1, verbose=False, kernel_name=None, skip_thresh=None, mxfp_bw=None):
         super(SparseAttentionMeansim, self).__init__()
         self.layer_idx = layer_idx
         self.head_num = None
@@ -103,6 +104,8 @@ class SparseAttentionMeansim(nn.Module):
         self.verbose = verbose
         self.kernel_name = kernel_name
         self.skip_thresh = skip_thresh
+        self.mxfp_bw = mxfp_bw
+        
     
     def is_sim(self, o_gt, o_sparse):
         if self.sim_rule == "cosine":
@@ -154,6 +157,8 @@ class SparseAttentionMeansim(nn.Module):
                 # return spas_sage_attn_meansim   # triton kernel 
         elif kernel_name == "online_routing":
             return online_routing_attn
+        elif kernel_name == "mxfp_attn_kernel":
+            return mxfp_attn_kernel
         else:
             raise ValueError(f"not support kernel name: {kernel_name}")
             
@@ -364,6 +369,22 @@ class SparseAttentionMeansim(nn.Module):
                     mask,
                     is_causal=is_causal,
                     skip_thresh=self.skip_thresh
+                )
+            elif self.kernel_name == "mxfp_attn_kernel":
+                # def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, 
+                #     is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
+                #     output_dtype=torch.float16, return_sparsity=False, block_scale_type="mxfp4", skip_thresh=None):
+                o = kernel(
+                    q,
+                    k,
+                    v,
+                    mask,
+                    is_causal=is_causal,
+                    scale=scale,
+                    tensor_layout=tensor_layout,
+                    attention_sink=False,
+                    block_scale_type=self.mxfp_bw,
+                    skip_thresh=self.skip_thresh,
                 )
             else:
                 o = kernel(
