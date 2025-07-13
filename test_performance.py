@@ -37,7 +37,7 @@ def test_performance():
     # 创建测试数据
     batch_size = 1
     num_heads = 4
-    seq_len = 512
+    seq_len = 333
     head_dim = 128
     
     q = torch.randn(batch_size, num_heads, seq_len, head_dim, device='cuda', dtype=torch.float16)

@@ -34,7 +34,7 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
         k = k - k.mean(dim=-2, keepdim=True)
 
     B, H, M, K = q.shape  # torch.Size([1, 24, 31409, 128])
-    import pdb; pdb.set_trace() 
+    # import pdb; pdb.set_trace() 
     N = k.shape[2]
 
     assert K in [64, 128], "headdim should be in [64, 128]."
@@ -61,34 +61,41 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     
     # 扩展 a_scale
     if M_padded > M:
-        # 计算需要填充的大小
-        pad_size = M_padded - M
-        # 创建新的tensor，用零填充
-        a_scale_padded = torch.zeros(B, H, M_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=a_scale.device, dtype=a_scale.dtype)
-        # 复制原始数据
-        a_scale_padded[:, :, :M//128, :, :, :, :] = a_scale
+        # # 计算需要填充的大小
+        # pad_size = M_padded - M
+        # # 创建新的tensor，用零填充
+        # a_scale_padded = torch.zeros(B, H, M_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=a_scale.device, dtype=a_scale.dtype)
+        # # 复制原始数据
+        # a_scale_padded[:, :, :M//128, :, :, :, :] = a_scale
+        # a_scale = a_scale_padded
+        # 计算填充后的目标长度（向上对齐到 128 的倍数）
+        # 创建新的 tensor，并用零填充
+        a_scale_padded = torch.zeros(B, H, M_padded, 4, device=a_scale.device, dtype=a_scale.dtype)
+        # 复制原始数据到前 M 的部分
+        a_scale_padded[:, :, :M, :] = a_scale
+        # 替换原始变量
         a_scale = a_scale_padded
-    else:
-        a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4)
+    # else:
+    #     a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4)
     
     # 扩展 b_scale
     if N_padded > N:
-        # 计算需要填充的大小
-        pad_size = N_padded - N
-        # 创建新的tensor，用零填充
-        b_scale_padded = torch.zeros(B, H, N_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=b_scale.device, dtype=b_scale.dtype)
-        # 复制原始数据
-        b_scale_padded[:, :, :N//128, :, :, :, :] = b_scale
+        # # 计算需要填充的大小
+        # pad_size = N_padded - N
+        # # 创建新的tensor，用零填充
+        # b_scale_padded = torch.zeros(B, H, N_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=b_scale.device, dtype=b_scale.dtype)
+        # # 复制原始数据
+        # b_scale_padded[:, :, :N//128, :, :, :, :] = b_scale
+        # b_scale = b_scale_padded
+        b_scale_padded = torch.zeros(B, H, N_padded, 4, device=b_scale.device, dtype=b_scale.dtype)
+        b_scale_padded[:, :, :N, :] = b_scale
         b_scale = b_scale_padded
-    else:
-        b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4)
+    # else:
+    #     b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4)
     
     # 应用permute操作
-    a_scale = a_scale.permute(0, 1, 2, 5, 4, 3, 6).contiguous()
-    b_scale = b_scale.permute(0, 1, 2, 5, 4, 3, 6).contiguous()
-    
-    # a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous() # torch.Size([1, 4, 4, 1, 32, 4, 4])
-    # b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
+    a_scale = a_scale.reshape(B, H, M_padded//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
+    b_scale = b_scale.reshape(B, H, N_padded//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
     
     a_packed, a_scale, b_packed, b_scale, configs, (reference, a_dequant, b_dequant) = \
         initialize_block_scaled_batched_from_tensor(a_quant, b_quant, a_scale, b_scale, block_scale_type=block_scale_type, compute_reference=False)
@@ -490,8 +497,10 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
     device = a_tensor.device
     
     # 验证scale tensor的形状（包含batch和head维度）
-    expected_a_scale_shape = (B, H, M // 128, K // VEC_SIZE // 4, 32, 4, 4)
-    expected_b_scale_shape = (B, H, N // 128, K // VEC_SIZE // 4, 32, 4, 4)
+    M_padded = (M + 127) // 128 * 128
+    N_padded = (N + 127) // 128 * 128
+    expected_a_scale_shape = (B, H, M_padded // 128, K // VEC_SIZE // 4, 32, 4, 4)
+    expected_b_scale_shape = (B, H, N_padded // 128, K // VEC_SIZE // 4, 32, 4, 4)
     assert a_scale.shape == expected_a_scale_shape, f"a_scale形状不匹配: 期望{expected_a_scale_shape}, 实际{a_scale.shape}"
     assert b_scale.shape == expected_b_scale_shape, f"b_scale形状不匹配: 期望{expected_b_scale_shape}, 实际{b_scale.shape}"
   
