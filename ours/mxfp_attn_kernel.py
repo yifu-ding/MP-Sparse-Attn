@@ -61,37 +61,17 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     
     # 扩展 a_scale
     if M_padded > M:
-        # # 计算需要填充的大小
-        # pad_size = M_padded - M
-        # # 创建新的tensor，用零填充
-        # a_scale_padded = torch.zeros(B, H, M_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=a_scale.device, dtype=a_scale.dtype)
-        # # 复制原始数据
-        # a_scale_padded[:, :, :M//128, :, :, :, :] = a_scale
-        # a_scale = a_scale_padded
-        # 计算填充后的目标长度（向上对齐到 128 的倍数）
-        # 创建新的 tensor，并用零填充
         a_scale_padded = torch.zeros(B, H, M_padded, 4, device=a_scale.device, dtype=a_scale.dtype)
         # 复制原始数据到前 M 的部分
         a_scale_padded[:, :, :M, :] = a_scale
         # 替换原始变量
         a_scale = a_scale_padded
-    # else:
-    #     a_scale = a_scale.reshape(B, H, M//128, 4, 32, K//VEC_SIZE//4, 4)
     
     # 扩展 b_scale
     if N_padded > N:
-        # # 计算需要填充的大小
-        # pad_size = N_padded - N
-        # # 创建新的tensor，用零填充
-        # b_scale_padded = torch.zeros(B, H, N_padded//128, 4, 32, K//VEC_SIZE//4, 4, device=b_scale.device, dtype=b_scale.dtype)
-        # # 复制原始数据
-        # b_scale_padded[:, :, :N//128, :, :, :, :] = b_scale
-        # b_scale = b_scale_padded
         b_scale_padded = torch.zeros(B, H, N_padded, 4, device=b_scale.device, dtype=b_scale.dtype)
         b_scale_padded[:, :, :N, :] = b_scale
         b_scale = b_scale_padded
-    # else:
-    #     b_scale = b_scale.reshape(B, H, N//128, 4, 32, K//VEC_SIZE//4, 4)
     
     # 应用permute操作
     a_scale = a_scale.reshape(B, H, M_padded//128, 4, 32, K//VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
@@ -100,15 +80,9 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     a_packed, a_scale, b_packed, b_scale, configs, (reference, a_dequant, b_dequant) = \
         initialize_block_scaled_batched_from_tensor(a_quant, b_quant, a_scale, b_scale, block_scale_type=block_scale_type, compute_reference=False)
     
-    # print("✓ 初始化成功")
-    # print(f"  - a_packed 形状: {a_packed.shape}")
-    # print(f"  - b_packed 形状: {b_packed.shape}")
-    # print(f"  - a_scale 形状: {a_scale.shape}")
-    # print(f"  - b_scale 形状: {b_scale.shape}")
-    
     # 执行多维批量attn
     output = block_scaled_batched_attn(
-        a_packed, a_scale, b_packed, b_scale, v,
+        a_packed, a_scale, b_packed, b_scale, v, is_causal, 
         torch.float16, B, H, M, N, K, configs, skip_thresh=skip_thresh
     )
     return output
@@ -165,7 +139,7 @@ def block_scaled_batched_attn_kernel(  #
         HEAD_DIM: tl.constexpr,  # 256
         NUM_STAGES: tl.constexpr,  # 4
         USE_2D_SCALE_LOAD: tl.constexpr, 
-        STAGE, qo_len, kv_len,
+        qo_len, kv_len, 
         skip_thresh: tl.constexpr = 1.0, 
         WARP_SIZE_M: tl.constexpr = 128,
         WARP_SIZE_N: tl.constexpr = 128,
@@ -397,7 +371,7 @@ def block_scaled_batched_attn_kernel(  #
     tl.store(o_ptrs, acc.to(output_dtype), mask = (offs_m[:, None] < qo_len))
 
 
-def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori, dtype_dst, B, H, M, N, K, configs, STAGE=1, skip_thresh=None):
+def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori, is_causal, dtype_dst, B, H, M, N, K, configs, skip_thresh=None):
     """
     支持多维批量矩阵乘法的函数
     
@@ -432,7 +406,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori, dtype_dst
     # 设置三维grid: 参考_attn_fwd的grid设置 (M*N的块数, head数, batch数)
     # grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), H, B)
 
-
+    # print(f"block_scaled_batched_attn(): is_causal={is_causal}")
     _, h_qo, qo_len, head_dim = a_desc.shape
     _, h_kv, kv_len, _ = b_desc.shape
     grid = (triton.cdiv(qo_len, BLOCK_M), H, B)
@@ -455,8 +429,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori, dtype_dst
         dtype_dst,
         configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
         configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], head_dim, # configs["BLOCK_SIZE_K"],
-        configs["num_stages"], USE_2D_SCALE_LOAD=True,
-        STAGE=STAGE, qo_len=qo_len, kv_len=kv_len, skip_thresh=skip_thresh)
+        configs["num_stages"], USE_2D_SCALE_LOAD=True, qo_len=qo_len, kv_len=kv_len, skip_thresh=skip_thresh)
     
     return output
 
