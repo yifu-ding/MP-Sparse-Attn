@@ -188,7 +188,7 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
     
     # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
-    emax_elem = 7 # 经验性的
+    emax_elem = 15 # 经验性的
     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
     # import pdb; pdb.set_trace()
     shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
@@ -200,8 +200,8 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     
     
     # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
-    x_quant = tl.clamp(x_quant, -57344, 57344)
-    # x_quant = tl.clamp(x_quant, -448, 448)
+    x_quant = tl.clamp(x_quant, -57344, 57344)  # e5m2 range
+    # x_quant = tl.clamp(x_quant, -448, 448)  # e4m3 range
     x_quant = x_quant.to(tl.float8e5)
     
     # 6. 存储量化后的值和scale

@@ -40,14 +40,17 @@ def test_performance():
     # 创建测试数据
     batch_size = 1
     num_heads = 4
-    seq_len = 333
+    # seq_len = 256
+    qo_len = 128
+    kv_len = 130
     head_dim = 128
+    is_causal = False
 
-    q = torch.randn(batch_size, num_heads, seq_len, head_dim,
+    q = torch.randn(batch_size, num_heads, qo_len, head_dim,
                     device='cuda', dtype=torch.float16)
-    k = torch.randn(batch_size, num_heads, seq_len, head_dim,
+    k = torch.randn(batch_size, num_heads, kv_len, head_dim, 
                     device='cuda', dtype=torch.float16)
-    v = torch.randn(batch_size, num_heads, seq_len, head_dim,
+    v = torch.randn(batch_size, num_heads, kv_len, head_dim,
                     device='cuda', dtype=torch.float16)
 
     print("Start performance test...")
@@ -119,7 +122,7 @@ def test_performance():
     block_scale_type = "mxfp8"
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
-        mxfp_attn_kernel, q, k, v, is_causal=True, block_scale_type=block_scale_type, skip_thresh=10
+        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, skip_thresh=10
     )
 
     # torch.cuda.empty_cache()
@@ -196,7 +199,7 @@ def test_performance():
         )
 
     out_torch, time_total_sdpa = measure_time(
-        test_sdpa, q, k, v, is_causal=True
+        test_sdpa, q, k, v, is_causal=is_causal
     )
 
     # 测试 flash-attention triton
@@ -237,7 +240,7 @@ def test_performance():
     # 打印结果
     print(f"\n{' Performance Test ':=^50}")
     print(
-        f"**** Shape ****\nbatch_size: {batch_size}, num_heads: {num_heads}, seq_len: {seq_len}, head_dim: {head_dim}")
+        f"**** Shape ****\nbatch_size: {batch_size}, num_heads: {num_heads}, seq_len: {kv_len}, head_dim: {head_dim}")
     # print("**** spas_sage_attn_meansim (triton) kernel 分析 ****")
     # print(f"get_block_map_meansim: {time_block_map:.4f} ms ({time_block_map/time_total_spas*100:.4f}%)")
     # print(f"per_block_int8: {time_int8:.4f} ms ({time_int8/time_total_spas*100:.4f}%)")
@@ -272,10 +275,13 @@ def test_performance():
 
     # import pdb; pdb.set_trace()
     if mse_mxfp is not None:
-        print(f"mse_mxfp {block_scale_type}: {mse_mxfp:.6f}")
+        print(f"mse_mxfp {block_scale_type} (is_causal={is_causal}): {mse_mxfp:.6f}")
+        print(f"out_mxfp[0][1]: {out_mxfp[0][1]}")
+        print(f"out_torch[0][1]: {out_torch[0][1]}")
     # print(f"mse_spas: {mse_spas:.6f}, mse_spas_full: {mse_spas_full:.6f}")
     # print(f"mse_spas_cuda: {mse_spas_cuda:.6f}, mse_spas_cuda_full: {mse_spas_cuda_full:.6f}")
     # print(f"mse_fa: {mse_fa:.6f}")
+    import pdb; pdb.set_trace()
 
 
 if __name__ == "__main__":
