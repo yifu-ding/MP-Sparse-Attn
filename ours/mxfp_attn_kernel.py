@@ -267,21 +267,8 @@ def block_scaled_batched_attn_kernel(  #
     # k_ptrs = k_ptr + k_base_offset + (offs_n[:, None] * stride_kn + off_k[None, :])  # [256, 256]
     v_ptrs = v_ori + v_base_offset + (offs_n[:, None] * stride_vn + off_v[None, :])  # 修正索引顺序
 
-    lo, hi = 0, kv_len
-    
-    # if STAGE == 1:
-    #     lo, hi = 0, start_m * BLOCK_M
-    # elif STAGE == 2:
-    #     lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-    #     lo = tl.multiple_of(lo, BLOCK_M)
-    #     k_scale_ptr += lo // BLOCK_N
-    #     k_ptrs += stride_kn * lo
-    #     v_ptrs += stride_kn * lo
-    # elif STAGE == 3:
-    #     lo, hi = 0, kv_len
-    
-    # tl.static_print("STAGE", STAGE)
-    sink_qk_max = 0.
+    # 因果注意力第一阶段
+    lo, hi = 0, start_m * BLOCK_M
     
     for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
         
@@ -308,85 +295,95 @@ def block_scaled_batched_attn_kernel(  #
             qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")  # 128,128
         else:
             qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
+     
+        # 因果注意力第一阶段计算
+        local_m = tl.max(qk, 1)  # [128]
+        new_m = tl.maximum(old_m, local_m)
+        qk = qk - new_m[:, None]
         
+        p = tl.math.exp2(qk)
+        l_ij = tl.sum(p, 1)
+        alpha = tl.math.exp2(old_m - new_m)
+        l_i = l_i * alpha + l_ij
+        acc = acc * alpha[:, None]
         
-        if start_n == lo:
-            # baseblock
-            # sink_qk_mean = tl.sum(qk) / (BLOCK_M * BLOCK_N)
-            sink_qk_max = tl.sum(tl.max(qk, 1)) / BLOCK_M
-            cur_qk_max = sink_qk_max
-            # tl.static_print(f"sink_qk_max: {sink_qk_max}")
+        # v = tl.load(v_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
+        v = tl.load(v_ptrs)
+        # tl.static_print("p.shape", p.shape)
+        # tl.static_print("v.shape", v.shape)
+
+        # 保持计算精度，使用float32进行累加，但确保数据类型匹配
+        # p = p.to(tl.float32)
+        # v = v.to(tl.float32)
+        p = p.to(tl.float16)
+        acc += tl.dot(p, v, out_dtype=tl.float16)
+        old_m = new_m
+
+        k_ptrs += BLOCK_N * stride_kn
+        v_ptrs += BLOCK_N * stride_vn
+        if USE_2D_SCALE_LOAD:
+            k_scale_ptr += (BLOCK_N // VEC_SIZE // 4) * stride_skk # stride_skk/stride_skn? # 应该是按照scale block的数量更新
+    
+
+    # 因果注意力第二阶段
+    lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
+    lo = tl.multiple_of(lo, BLOCK_M)
+
+    for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
+        
+        # 计算当前块的有效范围
+        curr_n_range = start_n + offs_n
+        n_mask = curr_n_range < kv_len
+        
+        # k = tl.load(k_ptrs, mask = offs_n[None, :] < (kv_len - start_n)) 
+        k = tl.load(k_ptrs, mask=n_mask[None, :])
+        scale_k = tl.load(k_scale_ptr)  # [2, 1024]
+        
+        # import pdb; pdb.set_trace()
+        if USE_2D_SCALE_LOAD:
+            scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4) 
+        
+        scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE)  # [128, 8] = 512 ele
+
+        if MIXED_PREC:
+            qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e2m1")
+        elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
+            qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")  # 128,128
         else:
-            # cur_qk_max = tl.max(qk, 1)
-            cur_qk_max = tl.sum(tl.max(qk, 1)) / BLOCK_M
-            # tl.static_print(f"cur_qk_max: {cur_qk_max}")
-            
-            # # 根据阈值过滤qk矩阵
-            # mask = cur_qk_max > sink_qk_max * thresh_1(start_n, lo, hi, BLOCK_N)
-            # # 根据mask筛选出需要保留的qk值
-            # # valid_qk = tl.zeros([BLOCK_M, tl.sum(mask)], dtype=tl.float32)
-            # # 使用 tl.cumsum 来避免循环
-            # mask_cumsum = tl.cumsum(mask.to(tl.int32))
-            # valid_qk = qk[mask_cumsum - 1, :]
-            # qk = valid_qk
-            
-            # if cur_qk_max < sink_qk_max * thresh_1(start_n, lo, hi, BLOCK_N):
-            # if cur_qk_max >= sink_qk_max * skip_thresh:
-                # tl.static_print(f"cur_qk_max: {cur_qk_max}, sink_qk_max: {sink_qk_max}")
-                # continue
-            
-        if start_n == lo or cur_qk_max >= sink_qk_max * skip_thresh: 
-            # tl.static_print("cur_qk_max:", cur_qk_max)
-            # 应用mask，将无效位置设为负无穷
-            # qk = tl.where(n_mask[None, :], qk, -float("inf"))
-            
-            # if STAGE == 2:   # is_causal
-            #     mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            #     qk = qk + tl.where(mask, 0, -1.0e6)
-            #     local_m = tl.max(qk, 1)
-            #     new_m = tl.maximum(old_m, local_m)
-            #     qk -= new_m[:, None]
-            # else:
-            #     local_m = tl.max(qk, 1)
-            #     new_m = tl.maximum(old_m, local_m)
-            #     qk = qk - new_m[:, None]
-            # import pdb; pdb.set_trace()
-            # if STAGE == 2:   # is_causal
-            #     mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            #     qk = qk + tl.where(mask, 0, -1.0e6)
-            #     local_m = tl.max(qk, 1)
-            #     new_m = tl.maximum(old_m, local_m)
-            #     qk -= new_m[:, None]
-            # else:
-            local_m = tl.max(qk, 1)  # [128]
-            new_m = tl.maximum(old_m, local_m)
-            qk = qk - new_m[:, None]
-            
-            p = tl.math.exp2(qk)
-            l_ij = tl.sum(p, 1)
-            alpha = tl.math.exp2(old_m - new_m)
-            l_i = l_i * alpha + l_ij
-            acc = acc * alpha[:, None]
-            
-            # v = tl.load(v_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
-            # v = tl.load(v_ptrs, mask=n_mask[:, None])
-            v = tl.load(v_ptrs)
-            # tl.static_print("p.shape", p.shape)
-            # tl.static_print("v.shape", v.shape)
+            qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
 
-            # 保持计算精度，使用float32进行累加，但确保数据类型匹配
-            # p = p.to(tl.float32)
-            # v = v.to(tl.float32)
-            p = p.to(tl.float16)
-            acc += tl.dot(p, v, out_dtype=tl.float16)
-            old_m = new_m
+        # 因果注意力第二阶段计算
+        mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+        qk = qk + tl.where(mask, 0, -1.0e6)
+        local_m = tl.max(qk, 1)
+        new_m = tl.maximum(old_m, local_m)
+        qk -= new_m[:, None]
+        
 
-            k_ptrs += BLOCK_N * stride_kn
-            v_ptrs += BLOCK_N * stride_vn
-            
-            if USE_2D_SCALE_LOAD:
-                k_scale_ptr += (BLOCK_N // VEC_SIZE // 4) * stride_skk # stride_skk/stride_skn? # 应该是按照scale block的数量更新
-                
+        p = tl.math.exp2(qk)
+        l_ij = tl.sum(p, 1)
+        alpha = tl.math.exp2(old_m - new_m)
+        l_i = l_i * alpha + l_ij
+        acc = acc * alpha[:, None]
+        
+        # v = tl.load(v_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
+        # v = tl.load(v_ptrs, mask=n_mask[:, None])
+        v = tl.load(v_ptrs)
+        # tl.static_print("p.shape", p.shape)
+        # tl.static_print("v.shape", v.shape)
+
+        # 保持计算精度，使用float32进行累加，但确保数据类型匹配
+        # p = p.to(tl.float32)
+        # v = v.to(tl.float32)
+        p = p.to(tl.float16)
+        acc += tl.dot(p, v, out_dtype=tl.float16)
+        old_m = new_m
+
+        k_ptrs += BLOCK_N * stride_kn
+        v_ptrs += BLOCK_N * stride_vn
+        if USE_2D_SCALE_LOAD:
+            k_scale_ptr += (BLOCK_N // VEC_SIZE // 4) * stride_skk # stride_skk/stride_skn? # 应该是按照scale block的数量更新
+
     # 存储结果（包含batch和head维度）
     # c_base_offset = off_z * stride_ob + off_h * stride_oh
     # o_ptrs = o_ptr + c_base_offset + (offs_m[:, None] * stride_om + offs_n[None, :])

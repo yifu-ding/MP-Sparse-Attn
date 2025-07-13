@@ -1,4 +1,13 @@
+import sys
 import os
+
+# 计算项目根路径（假设项目结构：MP-Sparse-Attn/evaluate/llama/llama_main.py）
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+
+# 确保项目根目录在 sys.path 最前面，优先导入
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 from init_llama import init_llama_model

@@ -1,5 +1,5 @@
-export PYTHONPATH=.
-export CUDA_VISIBLE_DEVICES=3
+# export PYTHONPATH=.
+export CUDA_VISIBLE_DEVICES=4
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # wandb offline
 
