@@ -122,8 +122,6 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
     end_time = time.time()
     print(f"***** Time taken in pred(): {end_time - start_time:.2f} seconds for {num_fewshots} samples on {dataset}. *****")
 
-
-
 # def get_pred(rank, world_size, data, max_length, max_gen, prompt_format, dataset, device, model_name, model2path, out_path):
 def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=None):
     # device = torch.device(f'cuda:{rank}')

@@ -142,17 +142,6 @@ class MXFPAttention(nn.Module):
     #     self.hyperparams_cache = {}
 
     def kernel_selection(self, kernel_name=None):
-        # if kernel_name == "spargeattn_triton":
-        #     return spas_sage_attn_meansim   # triton kernel 
-        # elif kernel_name == None or kernel_name == "spargeattn_cuda":
-        #     sm = torch.cuda.get_device_capability()
-        #     sm = 10*sm[0] + sm[1]
-        #     if sm >= 89:
-        #         return spas_sage2_attn_meansim_cuda
-        #     else:
-        #         # warnings.warn(f'{sm=}, do not support sageattn2, using sageattn1 kernel')
-        #         return spas_sage_attn_meansim_cuda
-        #         # return spas_sage_attn_meansim   # triton kernel 
         if kernel_name == "online_routing":
             return online_routing_attn
         elif kernel_name == "mxfp_attn":
@@ -305,7 +294,7 @@ class MXFPAttention(nn.Module):
                 is_causal=is_causal,
                 skip_thresh=self.skip_thresh
             )
-        elif self.kernel_name == "mxfp_attn_kernel":
+        elif self.kernel_name == "mxfp_attn":
             # def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, 
             #     is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
             #     output_dtype=torch.float16, return_sparsity=False, block_scale_type="mxfp4", skip_thresh=None):
@@ -322,7 +311,7 @@ class MXFPAttention(nn.Module):
                 output_dtype=output_dtype,
                 # skip_thresh=self.skip_thresh,
             )
-        else:
+        elif self.kernel_name == "native":
             o = kernel(
                 q,
                 k,
@@ -331,6 +320,8 @@ class MXFPAttention(nn.Module):
                 is_causal=is_causal,
                 scale=scale,
             )
+        else:
+            raise ValueError(f"not support kernel name: {self.kernel_name}")
         
         if return_sparsity:
             o, total_sparsity = o

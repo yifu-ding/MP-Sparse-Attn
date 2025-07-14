@@ -98,7 +98,6 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None):
             else:
                 key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
-                
                 attn_out_dtype = self.o_proj.weight.dtype
                 attn_output = self.mxfp_attention(query_states, key_states, value_states, is_causal=True, output_dtype=attn_out_dtype)
                 if verbose:
@@ -107,7 +106,6 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None):
 
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
-                # import pdb; pdb.set_trace()
                 attn_output = self.o_proj(attn_output)
 
             # return attn_output, None, past_key_value   # for transformers==4.46.3

@@ -11,7 +11,7 @@ from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 import random
 import os
 
-iter_times = 10
+iter_times = 100
 
 def measure_time(func, *args, **kwargs):
     # # warmup
@@ -50,7 +50,7 @@ def test_performance():
     seed_all(42)
 
     batch_size = 1
-    num_heads = 4
+    num_heads = 24
     qo_len = 130
     kv_len = 1024
     head_dim = 128

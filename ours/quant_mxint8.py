@@ -313,10 +313,10 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     
     # 这里增加量化的 scale
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
-    # 对于float4 (e2m1)
+    x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # float4 (e2m1) range: [-6, 6]
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # 手动实现float4 (e2m1)的量化
+    # float4 (e2m1) 的量化实现
     # 1. 获取符号位
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
@@ -330,9 +330,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))
     mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
     # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在float8里
-    # x_quant = (sign << 7) | (exp << 3) | (mantissa << 2)
     x_quant = (sign << 3) | (exp << 1) | mantissa
-    # x_quant = x_quant.to(tl.uint8)
     
     # Pack two e2m1 elements into a single uint8 along the specified dimension.
     # x_uint8 = tl.reshape(x_quant, x.shape)

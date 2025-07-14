@@ -32,14 +32,19 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 #     # --num_fewshots 50 \
 
 # mxfp attn
+MODEL_NAME=Llama-3.2-3B-Instruct
+KERNEL_NAME=mxfp_attn
+OUTPUT_PATH=./results/${KERNEL_NAME}_${MODEL_NAME}
+mkdir -p $OUTPUT_PATH
 python evaluate/llama/llama_main.py \
-    --model Llama-3.2-3B-Instruct \
+    --model $MODEL_NAME \
     --device cuda \
-    --output_path ./results \
-    --test_accuracy \
-    --kernel_name mxfp_attn \
-    --mxfp_bw mxfp8 \
-    2>&1 | tee ./logs/mxfp_attn_llama-3.2-3b-instruct_mxfp8_test_accuracy.log
+    --output_path $OUTPUT_PATH \
+    --get_pred \
+    --compute_accuracy \
+    --test_dataset_name dureader \
+    --kernel_name $KERNEL_NAME \
+    2>&1 | tee $OUTPUT_PATH/log.log
     # --test_speedup \
     # --use_wandb \
 

@@ -69,21 +69,20 @@ def main():
     parser.add_argument('--num_fewshots', type=int, default=None, help="number of fewshots")
     
     # test config
-    parser.add_argument('--test_accuracy', action='store_true', help="test accuracy")
+    parser.add_argument('--compute_accuracy', action='store_true', help="compute accuracy")
+    parser.add_argument('--get_pred', action='store_true', help="get pred")
     parser.add_argument('--test_speedup', action='store_true', help="test speedup")
     
     # our method
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
-    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name")
-    parser.add_argument('--mxfp_bw', type=str, default=None, help="mxfp bw")
+    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "native", 'spargeattn'])
+    parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     
 
     # 解析参数
     args = parser.parse_args()
-    assert args.test_accuracy or args.test_speedup, "must choose one of test_accuracy or test_speedup"
-    if args.test_accuracy: print("***** test accuracy *****")
-    if args.test_speedup: print(f"***** test speedup on {args.num_fewshots} samples *****")
-    assert args.mxfp_bw in ["mxfp4", "mxfp8"], "mxfp_bw must be in [mxfp4, mxfp8]"
+    assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
+    assert args.mxfp_bw in ["mxfp4", "mxfp8"], "mxfp_bw must be in ['mxfp4', 'mxfp8']"
     
     print(f"***** args: {args} *****")
     
@@ -224,7 +223,7 @@ def main():
         set_spas_sage_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name)
         print("replace outline_routing!")
     elif args.kernel_name == "mxfp_attn":
-        set_mxfp_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw)
+        set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
     else:
         print("use the original transformer attention!")
@@ -262,8 +261,8 @@ def main():
             time_per_sample = get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=args.num_fewshots)
             if args.use_wandb:
                 wandb.log({"time_per_sample": time_per_sample})
-            
-    if args.test_accuracy:
+
+    if args.get_pred:
         for dataset in datasets:
             if args.e:
                 data = load_dataset(
@@ -301,6 +300,7 @@ def main():
             # def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path):
             get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=args.num_fewshots)
 
+    if args.compute_accuracy:
         scores = dict()
         if args.e:
             path = os.path.join(out_path_pred_e, model_name)

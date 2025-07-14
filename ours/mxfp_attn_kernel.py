@@ -35,11 +35,17 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     qo_len = M
     kv_len = N
 
-    assert K in [64, 128], "headdim should be in [64, 128]."
+    assert K in [128], "headdim should be in [128]."
 
     BLKQ = 128
     if block_scale_type == "mxfp4":
-        a_fp4, a_scale, b_fp4, b_scale = quant_mxfp4(q, k, BLKQ=BLKQ, pack_along_lastdim=True)
+        pack_along_lastdim = False  # True: kernel fusion support for pack fp4 tensor into uint8 tensor
+        a_fp4, a_scale, b_fp4, b_scale = quant_mxfp4(q, k, BLKQ=BLKQ, pack_along_lastdim=pack_along_lastdim)
+        if not pack_along_lastdim:
+            a_fp4 = MXFP4Tensor(data=a_fp4, dtype=torch.uint8)
+            a_fp4 = a_fp4.to_packed_tensor(dim=len(a_fp4.data.shape) - 1)
+            b_fp4 = MXFP4Tensor(data=b_fp4, dtype=torch.uint8)
+            b_fp4 = b_fp4.to_packed_tensor(dim=len(b_fp4.data.shape) - 1)
         a_quant = a_fp4
         b_quant = b_fp4
     elif block_scale_type == "mxfp8":
@@ -53,15 +59,14 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     VEC_SIZE = 16 if block_scale_type == "nvfp4" else 32
 
     # 扩展 a_scale 和 b_scale 的第2维度为128的倍数
-    M_padded = ((M + 127) // 128) * 128  # 向上取整到128的倍数
-    N_padded = ((N + 127) // 128) * 128  # 向上取整到128的倍数
+    M_padded = ((M + 127) // 128) * 128 
+    N_padded = ((N + 127) // 128) * 128 
 
     # 扩展 a_scale
     if M_padded > M:
         a_scale_padded = torch.zeros(B, H, M_padded, K//VEC_SIZE, device=a_scale.device, dtype=a_scale.dtype)
         a_scale_padded[:, :, :M, :] = a_scale
         a_scale = a_scale_padded
-
     # 扩展 b_scale
     if N_padded > N:
         b_scale_padded = torch.zeros(B, H, N_padded, K//VEC_SIZE, device=b_scale.device, dtype=b_scale.dtype)
@@ -91,16 +96,11 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
         "VEC_SIZE": VEC_SIZE,
     }
 
-    a_packed, b_packed = a_quant, b_quant
-
-    # 执行多维批量attn
     output = block_scaled_batched_attn(
-        a_packed, a_scale, b_packed, b_scale, v,  is_causal,
+        a_quant, a_scale, b_quant, b_scale, v,  is_causal,
         output_dtype, B, H, M, N, K, configs
     )
     return output
-    # return None
-
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
