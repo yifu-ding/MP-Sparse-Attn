@@ -41,10 +41,10 @@ def test_performance():
     batch_size = 1
     num_heads = 4
     # seq_len = 256
-    qo_len = 130
+    qo_len = 180
     kv_len = 150
     head_dim = 128
-    is_causal = False
+    is_causal = True
 
     q = torch.randn(batch_size, num_heads, qo_len, head_dim,
                     device='cuda', dtype=torch.float16)

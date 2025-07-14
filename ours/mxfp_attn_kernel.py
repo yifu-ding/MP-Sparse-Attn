@@ -75,9 +75,9 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     M_padded = ((M + 127) // 128) * 128  # 向上取整到128的倍数
     N_padded = ((N + 127) // 128) * 128  # 向上取整到128的倍数
 
-    # import pdb; pdb.set_trace()
-    if sum(a_scale!=0).sum().item() != 2080:
-        import pdb; pdb.set_trace()
+    # # import pdb; pdb.set_trace()
+    # if sum(a_scale!=0).sum().item() != 2080:
+    #     import pdb; pdb.set_trace()
 
     # 扩展 a_scale
     if M_padded > M:
@@ -96,13 +96,6 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     # 应用permute操作
     a_scale = a_scale.reshape(B, H, M_padded//128, 4, 32, K //VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
     b_scale = b_scale.reshape(B, H, N_padded//128, 4, 32, K //VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
-
-    # only for debug!
-    # import pdb; pdb.set_trace()
-    # a_quant = torch.ones_like(a_quant)
-    # a_scale = torch.ones_like(a_scale)
-    # b_scale = torch.ones_like(b_scale)
-    # b_quant = torch.zeros_like(b_quant)
 
     # 保存量化后的张量到.pth文件
     if save_files: 
@@ -158,7 +151,7 @@ def _matmul_launch_metadata(grid, kernel, args):
 
 
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def block_scaled_batched_attn_kernel(  #
+def block_scaled_batched_attn_kernel_debug(  #
         q_ptr, q_scale,  #
         k_ptr, k_scale,  #
         v_ori,
@@ -188,6 +181,7 @@ def block_scaled_batched_attn_kernel(  #
         # for debug
         save_files=False, scale_q0_ptr=None, scale_q1_ptr=None, qk0_ptr=None, qk1_ptr=None, scale_q0_ptr_ptr=None, scale_q1_ptr_ptr=None,
 ):  # False, qo_len = 256, kv_len = 512
+
 
     # 获取三维grid的索引 - 参考_attn_fwd的实现
     start_m = tl.program_id(0)  # M*N维度的块索引
@@ -242,18 +236,18 @@ def block_scaled_batched_attn_kernel(  #
     # off_save = tl.arange(0, BLOCK_M)[:, None] * (HEAD_DIM // VEC_SIZE) + tl.arange(0, HEAD_DIM // VEC_SIZE)[None, :]
     off_save = offs_inner[None, :]
     
-    # if save_files:
-    #     if pid_m == 0 and (off_z == 0 and off_h == 1):
-    #         scale_q0_ptrs = scale_q0_ptr + off_save
-    #         scale_q0_ptr_ptrs = scale_q0_ptr_ptr + off_save
-    #         tmp_scale_q = tl.load(q_scale + 1024 + off_save)
-    #         tl.store(scale_q0_ptrs, tmp_scale_q)
-    #         tl.store(scale_q0_ptr_ptrs, q_scale_offsets)
-    #     elif pid_m == 1 and (off_z == 0 and off_h == 1):
-    #         scale_q1_ptrs = scale_q1_ptr + off_save
-    #         scale_q1_ptr_ptrs = scale_q1_ptr_ptr + off_save
-    #         tl.store(scale_q1_ptrs, scale_q)
-    #         tl.store(scale_q1_ptr_ptrs, q_scale_offsets)
+    if save_files:
+        if pid_m == 0 and (off_z == 0 and off_h == 1):
+            scale_q0_ptrs = scale_q0_ptr + off_save
+            scale_q0_ptr_ptrs = scale_q0_ptr_ptr + off_save
+            tmp_scale_q = tl.load(q_scale + 1024 + off_save)
+            tl.store(scale_q0_ptrs, tmp_scale_q)
+            tl.store(scale_q0_ptr_ptrs, q_scale_offsets)
+        elif pid_m == 1 and (off_z == 0 and off_h == 1):
+            scale_q1_ptrs = scale_q1_ptr + off_save
+            scale_q1_ptr_ptrs = scale_q1_ptr_ptr + off_save
+            tl.store(scale_q1_ptrs, scale_q)
+            tl.store(scale_q1_ptr_ptrs, q_scale_offsets)
                 
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)  # [128, 256] -> p
 
@@ -325,9 +319,9 @@ def block_scaled_batched_attn_kernel(  #
                 tl.store(qk1_ptrs, qk)
 
         qk = tl.where(n_mask[None, :], qk, -float("inf"))
-        qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
+        # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
-        # 因果注意力第一阶段计算
+        # 非因果注意力计算
         local_m = tl.max(qk, 1)  # [128]
         new_m = tl.maximum(old_m, local_m)
         qk = qk - new_m[:, None]
@@ -358,7 +352,7 @@ def block_scaled_batched_attn_kernel(  #
 
 
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def block_scaled_batched_attn_kernel_ori(  #
+def block_scaled_batched_attn_kernel(  #
         q_ptr, q_scale,  #
         k_ptr, k_scale,  #
         v_ori,
@@ -371,17 +365,16 @@ def block_scaled_batched_attn_kernel_ori(  #
         stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # q_scale的strides
         # k_scale的strides  # stride_skn=1024
         stride_skb, stride_skh, stride_skn, stride_skk,
-        # stride_sk: tl.constexpr, stride_sk: tl.constexpr, stride_sc: tl.constexpr, stride_sd: tl.constexpr,
         num_h: tl.constexpr,  # head数量
         output_type: tl.constexpr,  #
         is_causal: tl.constexpr,  #
         ELEM_PER_BYTE_A: tl.constexpr,  #
         ELEM_PER_BYTE_B: tl.constexpr,  #
         VEC_SIZE: tl.constexpr,  #
-        BLOCK_M: tl.constexpr,  # 128
-        BLOCK_N: tl.constexpr,  # 256
-        HEAD_DIM: tl.constexpr,  # 256
-        NUM_STAGES: tl.constexpr,  # 4
+        BLOCK_M: tl.constexpr, 
+        BLOCK_N: tl.constexpr, 
+        HEAD_DIM: tl.constexpr, 
+        NUM_STAGES: tl.constexpr, 
         USE_2D_SCALE_LOAD: tl.constexpr,
         qo_len, kv_len,
         skip_thresh: tl.constexpr = 1.0,
@@ -389,13 +382,6 @@ def block_scaled_batched_attn_kernel_ori(  #
         WARP_SIZE_N: tl.constexpr = 128,
 ):  # False, qo_len = 256, kv_len = 512
 
-    # WARP_SIZE_M = 64
-    # WARP_SIZE_N = 128
-
-    # if skip_thresh is None:
-    #     skip_thresh = -1e6  # -inf
-
-    # 获取三维grid的索引 - 参考_attn_fwd的实现
     start_m = tl.program_id(0)  # M*N维度的块索引
     off_h = tl.program_id(1).to(tl.int64)  # head维度索引
     off_z = tl.program_id(2).to(tl.int64)  # batch维度索引
@@ -403,12 +389,11 @@ def block_scaled_batched_attn_kernel_ori(  #
     # 计算M和N维度的块索引
     num_pid_m = tl.cdiv(qo_len, BLOCK_M)
     pid_m = start_m % num_pid_m
-    # pid_n = start_m // num_pid_m
 
     # 计算偏移量
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_n = tl.arange(0, BLOCK_N)  # 每次计算的 token 列数 # [128]
+    offs_n = tl.arange(0, BLOCK_N) # 每次计算的 token 列数 # [128]
 
     offs_k_a = 0
     offs_k_b = 0
@@ -422,13 +407,7 @@ def block_scaled_batched_attn_kernel_ori(  #
 
     # block scale offsets - 参考_attn_fwd的offset计算方式
     offs_sm = (pid_m * (BLOCK_M // WARP_SIZE_M) + tl.arange(0, BLOCK_M // WARP_SIZE_M)) % qo_len  # [1] when pid_m==1
-    # offs_sm = (pid_m * (BLOCK_M // 128) + tl.arange(0, BLOCK_M // 128)) % qo_len  # [1] when pid_m==1
-    # offs_sn = (0 * (BLOCK_N // 128) + tl.arange(0, BLOCK_N // 128)) % N
-    offs_sn = tl.arange(0, BLOCK_N // WARP_SIZE_N)  # [0, 2]
-
-    # ## block scale offsets
-    # offs_sm = (pid_m * (BLOCK_M // 128) + tl.arange(0, BLOCK_M // 128)) % M
-    # offs_sn = (pid_n * (BLOCK_N // 128) + tl.arange(0, BLOCK_N // 128)) % N
+    offs_sn = tl.arange(0, BLOCK_N // WARP_SIZE_N) % kv_len  # [0, 2]
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
@@ -442,12 +421,8 @@ def block_scaled_batched_attn_kernel_ori(  #
     # 简化scale load，使用2D模式
     if USE_2D_SCALE_LOAD:
         offs_inner = tl.arange(0, (HEAD_DIM // VEC_SIZE // 4) * 32 * 4 * 4)
-        q_scale_ptr = q_scale + q_scale_base_offset + offs_sm[:, None] * stride_sqm + offs_inner[None, :]  # [1, 1024]
-        k_scale_ptr = k_scale + k_scale_base_offset + offs_sn[:, None] * stride_skn + offs_inner[None, :]  # [2, 1024]
-
-        # offs_inner = tl.arange(0, (HEAD_DIM // VEC_SIZE // 4) * 32 * 4 * 4)
-        # q_scale_ptr = q_scale + offs_sm[:, None] * stride_sk + offs_inner[None, :]
-        # k_scale_ptr = k_scale + offs_sn[:, None] * stride_sk + offs_inner[None, :]
+        q_scale_ptr = q_scale + q_scale_base_offset + offs_sm[:, None] * stride_sqm + offs_inner[None, :] 
+        k_scale_ptr = k_scale + k_scale_base_offset + offs_sn[:, None] * stride_skn + offs_inner[None, :] 
 
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)  # [128, 256] -> p
 
@@ -464,28 +439,18 @@ def block_scaled_batched_attn_kernel_ori(  #
     off_v = tl.arange(0, HEAD_DIM)
 
     q_ptrs = q_ptr + q_base_offset + offs_m[:, None] * stride_qm + off_q[None, :]
-    q = tl.load(q_ptrs, mask=offs_m[:, None] < qo_len)  # [128, 256]
-
-    # scale_q = tl.load(q_scale_ptr, mask=offs_sm[:, None] < qo_len)  # [1, 512]
+    q = tl.load(q_ptrs, mask=offs_m[:, None] < qo_len, other=0.0)
     scale_q = tl.load(q_scale_ptr)  # [1, 512]
 
     if USE_2D_SCALE_LOAD:
-        # scale_q = scale_q.reshape(BLOCK_M // 128, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
         scale_q = scale_q.reshape(BLOCK_M // WARP_SIZE_M, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
     scale_q = scale_q.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // VEC_SIZE)  # [128, 8]
 
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # 初始化为1，这是在线softmax的标准做法
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # 初始化为1
     old_m = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
 
-    # import pdb; pdb.set_trace()
-
-    # for k in tl.range(0, tl.cdiv(K, HEAD_DIM), num_stages=NUM_STAGES):
-    # 计算当前batch和head的数据指针
-    # 是e5m2
-    # q_ptrs = q_ptr + q_base_offset + (offs_m[:, None] * stride_qm + (offs_k_a + tl.arange(0, HEAD_DIM))[None, :])
-    k_ptrs = k_ptr + k_base_offset + (offs_n[None, :] * stride_kn + off_k[:, None])  # [256, 256]
-    # k_ptrs = k_ptr + k_base_offset + (offs_n[:, None] * stride_kn + off_k[None, :])  # [256, 256]
-    v_ptrs = v_ori + v_base_offset + (offs_n[:, None] * stride_vn + off_v[None, :])  # 修正索引顺序
+    k_ptrs = k_ptr + k_base_offset + (offs_n[None, :] * stride_kn + off_k[:, None]) 
+    v_ptrs = v_ori + v_base_offset + (offs_n[:, None] * stride_vn + off_v[None, :]) 
 
     if is_causal:
         # 因果注意力第一阶段
@@ -497,18 +462,12 @@ def block_scaled_batched_attn_kernel_ori(  #
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
-            # k = tl.load(k_ptrs, mask = offs_n[None, :] < (kv_len - start_n))
-            k = tl.load(k_ptrs, mask=n_mask[None, :])
-            scale_k = tl.load(k_scale_ptr, mask=offs_sn[:, None] < kv_len)  # [2, 1024]
-
-            # import pdb; pdb.set_trace()
+            k = tl.load(k_ptrs, mask=n_mask[None, :], other=0.0)  # [headdim, 130-128] 
+            scale_k = tl.load(k_scale_ptr)  # round1: 128*4 --> k: 128*128, round2: 2*4  k: (130-128)*128 = 2*128
+            
             if USE_2D_SCALE_LOAD:
                 scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
-
             scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE)  # [128, 8] = 512 ele
-
-            # import pdb; pdb.set_trace()
-            # qk = tl.dot(q, k, out_dtype=tl.float32)
 
             if MIXED_PREC:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e2m1")
@@ -516,6 +475,9 @@ def block_scaled_batched_attn_kernel_ori(  #
                 qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")  # 128,128
             else:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
+
+            # qk = tl.where(n_mask[None, :], qk, -float("inf"))
+            # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
             # 因果注意力第一阶段计算
             local_m = tl.max(qk, 1)  # [128]
@@ -527,15 +489,8 @@ def block_scaled_batched_attn_kernel_ori(  #
             alpha = tl.math.exp2(old_m - new_m)
             l_i = l_i * alpha + l_ij
             acc = acc * alpha[:, None]
-
-            # v = tl.load(v_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
-            v = tl.load(v_ptrs, mask=n_mask[:, None])
-            # tl.static_print("p.shape", p.shape)
-            # tl.static_print("v.shape", v.shape)
-
-            # 保持计算精度，使用float32进行累加，但确保数据类型匹配
-            # p = p.to(tl.float32)
-            # v = v.to(tl.float32)
+            
+            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
             p = p.to(tl.float16)
             acc += tl.dot(p, v, out_dtype=tl.float16)
             old_m = new_m
@@ -544,7 +499,7 @@ def block_scaled_batched_attn_kernel_ori(  #
             v_ptrs += BLOCK_N * stride_vn
             if USE_2D_SCALE_LOAD:
                 # stride_skk/stride_skn? # 应该是按照scale block的数量更新
-                k_scale_ptr += (BLOCK_N // VEC_SIZE // 4) * stride_skk
+                k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
 
         # 因果注意力第二阶段
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
@@ -557,24 +512,22 @@ def block_scaled_batched_attn_kernel_ori(  #
             n_mask = curr_n_range < kv_len
 
             # k = tl.load(k_ptrs, mask = offs_n[None, :] < (kv_len - start_n))
-            k = tl.load(k_ptrs, mask=n_mask[None, :])
-            scale_k = tl.load(k_scale_ptr, mask=offs_sn[:, None] < kv_len)  # [2, 1024]
+            k = tl.load(k_ptrs, mask=n_mask[None, :], other=0.0) 
+            scale_k = tl.load(k_scale_ptr)  # [2, 1024]
 
-            # import pdb; pdb.set_trace()
             if USE_2D_SCALE_LOAD:
-                scale_k = scale_k.reshape(
-                    BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
-
-            scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(
-                BLOCK_N, HEAD_DIM // VEC_SIZE)  # [128, 8] = 512 ele
+                scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
+            scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE)  # [128, 8] = 512 ele
 
             if MIXED_PREC:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e2m1")
             elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
-                qk = tl.dot_scaled(q, scale_q, "e2m1", k,
-                                   scale_k, "e2m1")  # 128,128
+                qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")  # 128,128
             else:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
+
+            qk = tl.where(n_mask[None, :], qk, -float("inf"))
+            # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
             # 因果注意力第二阶段计算
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -589,15 +542,7 @@ def block_scaled_batched_attn_kernel_ori(  #
             l_i = l_i * alpha + l_ij
             acc = acc * alpha[:, None]
 
-            # v = tl.load(v_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
-            v = tl.load(v_ptrs, mask=n_mask[:, None])
-            # v = tl.load(v_ptrs)
-            # tl.static_print("p.shape", p.shape)
-            # tl.static_print("v.shape", v.shape)
-
-            # 保持计算精度，使用float32进行累加，但确保数据类型匹配
-            # p = p.to(tl.float32)
-            # v = v.to(tl.float32)
+            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
             p = p.to(tl.float16)
             acc += tl.dot(p, v, out_dtype=tl.float16)
             old_m = new_m
@@ -605,11 +550,9 @@ def block_scaled_batched_attn_kernel_ori(  #
             k_ptrs += BLOCK_N * stride_kn
             v_ptrs += BLOCK_N * stride_vn
             if USE_2D_SCALE_LOAD:
-                # stride_skk/stride_skn? # 应该是按照scale block的数量更新
-                k_scale_ptr += (BLOCK_N // VEC_SIZE // 4) * stride_skk
+                k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
     else:
-        # sink_qk_max = 0.
-
+       
         lo, hi = 0, kv_len
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
@@ -617,25 +560,23 @@ def block_scaled_batched_attn_kernel_ori(  #
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
-            # k = tl.load(k_ptrs, mask = offs_n[None, :] < (kv_len - start_n))
-            k = tl.load(k_ptrs, mask=n_mask[None, :])
-            # scale_k = tl.load(k_scale_ptr, mask=offs_sn[:, None] < kv_len)  # [2, 1024]
+            k = tl.load(k_ptrs, mask=n_mask[None, :], other=0.0) 
             scale_k = tl.load(k_scale_ptr)  # [2, 1024]
 
-            # import pdb; pdb.set_trace()
             if USE_2D_SCALE_LOAD:
                 scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
-
             scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE)  # [128, 8] = 512 ele
 
             if MIXED_PREC:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e2m1")
             elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
-                qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")  # 128,128
+                qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")
             else:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
 
-            # 因果注意力第一阶段计算
+            qk = tl.where(n_mask[None, :], qk, -float("inf"))
+
+            # 非因果注意力计算
             local_m = tl.max(qk, 1)  # [128]
             new_m = tl.maximum(old_m, local_m)
             qk = qk - new_m[:, None]
@@ -646,12 +587,7 @@ def block_scaled_batched_attn_kernel_ori(  #
             l_i = l_i * alpha + l_ij
             acc = acc * alpha[:, None]
 
-            # v = tl.load(v_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
-            v = tl.load(v_ptrs, mask=n_mask[:, None])
-            # tl.static_print("p.shape", p.shape)
-            # tl.static_print("v.shape", v.shape)
-
-            # 保持计算精度，使用float32进行累加，但确保数据类型匹配
+            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
             p = p.to(tl.float16)
             acc += tl.dot(p, v, out_dtype=tl.float16)
             old_m = new_m
@@ -659,13 +595,10 @@ def block_scaled_batched_attn_kernel_ori(  #
             k_ptrs += BLOCK_N * stride_kn
             v_ptrs += BLOCK_N * stride_vn
             if USE_2D_SCALE_LOAD:
-                # stride_skk/stride_skn? # 应该是按照scale block的数量更新
-                k_scale_ptr += (BLOCK_N // VEC_SIZE // 4) * stride_skk
+                k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
 
     acc = acc / l_i[:, None]
     o_ptrs = o_ptr + off_z * stride_ob + off_h * stride_oh + offs_m[:, None] * stride_om + off_v[None, :]  # * stride_on
-    # tl.static_print("acc.shape", acc.shape)
-    # tl.static_print("o_ptrs.shape", o_ptrs.shape)
     tl.store(o_ptrs, acc.to(output_dtype), mask=(offs_m[:, None] < qo_len))
 
 
@@ -707,24 +640,15 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori,  is_causa
     # print(f"block_scaled_batched_attn(): is_causal={is_causal}")
     _, h_qo, qo_len, head_dim = a_desc.shape
     _, h_kv, kv_len, _ = b_desc.shape
-    print(f"qo_len={qo_len}, kv_len={kv_len}")
     
     grid = (triton.cdiv(qo_len, BLOCK_M), H, B)
 
-    # scale_q0_ptr = torch.zeros((BLOCK_M, head_dim // 32), dtype=torch.float, device="cuda")
-    # scale_q0_ptr = torch.zeros((BLOCK_M, head_dim // 32), dtype=torch.float, device="cuda")
-    scale_q0_ptr = torch.zeros((512), dtype=torch.float, device="cuda")
-    scale_q1_ptr = torch.zeros((512), dtype=torch.float, device="cuda")
-    scale_q0_ptr_ptr = torch.zeros((1, 512), dtype=torch.float, device="cuda")
-    scale_q1_ptr_ptr = torch.zeros((1, 512), dtype=torch.float, device="cuda")
-    qk0_ptr = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float, device="cuda")
-    qk1_ptr = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float, device="cuda")
-
-    assert a_scale.is_contiguous(), f"a_scale is not contiguous"
-    assert b_scale.is_contiguous(), f"b_scale is not contiguous"
-    assert a_desc.is_contiguous(), f"a_desc is not contiguous"
-    assert b_desc.is_contiguous(), f"b_desc is not contiguous"
-    assert v_ori.is_contiguous(), f"v_ori is not contiguous"
+    scale_q0_ptr = torch.zeros((128, 4), dtype=torch.float32, device="cuda")
+    scale_q1_ptr = torch.zeros((128, 4), dtype=torch.float32, device="cuda")
+    qk0_ptr = torch.zeros((128, 128), dtype=torch.float32, device="cuda")
+    qk1_ptr = torch.zeros((128, 128), dtype=torch.float32, device="cuda")
+    scale_q0_ptr_ptr = torch.zeros((1, 512), dtype=torch.float32, device="cuda")
+    scale_q1_ptr_ptr = torch.zeros((1, 512), dtype=torch.float32, device="cuda")
 
     block_scaled_batched_attn_kernel[grid](
         a_desc, a_scale, b_desc, b_scale, v_ori, output, M, N, K,
@@ -745,8 +669,8 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori,  is_causa
         configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
         # configs["BLOCK_SIZE_K"],
         configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], head_dim,
-        configs["num_stages"], USE_2D_SCALE_LOAD=True, qo_len=qo_len, kv_len=kv_len, skip_thresh=skip_thresh, 
-        save_files=save_files, scale_q0_ptr=scale_q0_ptr, scale_q1_ptr=scale_q1_ptr, qk0_ptr=qk0_ptr, qk1_ptr=qk1_ptr, scale_q0_ptr_ptr=scale_q0_ptr_ptr, scale_q1_ptr_ptr=scale_q1_ptr_ptr)
+        configs["num_stages"], USE_2D_SCALE_LOAD=True, qo_len=qo_len, kv_len=kv_len, skip_thresh=skip_thresh)
+        # save_files=save_files, scale_q0_ptr=scale_q0_ptr, scale_q1_ptr=scale_q1_ptr, qk0_ptr=qk0_ptr, qk1_ptr=qk1_ptr, scale_q0_ptr_ptr=scale_q0_ptr_ptr, scale_q1_ptr_ptr=scale_q1_ptr_ptr)
 
 
     if save_files:
