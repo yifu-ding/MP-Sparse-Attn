@@ -13,13 +13,12 @@ import types
 from ours.kernel_selection import MXFPAttention
 
 
-def set_mxfp_attn_llama(model, verbose=False, skip_thresh=None, kernel_name=None, mxfp_bw=None):
+def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None):
     for layer_id, layer in enumerate(model.model.layers):
 
         setattr(layer.self_attn, 'mxfp_attention', MXFPAttention(layer_idx=layer_id, 
                                                                     verbose=verbose,
                                                                     kernel_name=kernel_name,
-                                                                    skip_thresh=skip_thresh,
                                                                     mxfp_bw=mxfp_bw))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
@@ -100,27 +99,8 @@ def set_mxfp_attn_llama(model, verbose=False, skip_thresh=None, kernel_name=None
                 key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
                 
-                # # 创建保存目录
-                # import os
-                # save_dir = "./results/saved_qkv"
-                # os.makedirs(save_dir, exist_ok=True)
-
-                # # 生成文件名
-                # save_name = f"qkv_bsz{bsz}_qlen{q_len}_layer{self.layer_idx}.pt"
-                # save_path = os.path.join(save_dir, save_name)
-
-                # # 保存 query_states, key_states, value_states
-                # torch.save({
-                #     'query_states': query_states,
-                #     'key_states': key_states, 
-                #     'value_states': value_states
-                # }, save_path)
-
-                # if self.layer_idx > 3:
-                #     exit()
-                
-                # attn_output = spas_sage_attn(query_states, key_states, value_states, is_causal=True, )  # need to add other parameters
-                attn_output = self.mxfp_attention(query_states, key_states, value_states, is_causal=True, )
+                attn_out_dtype = self.o_proj.weight.dtype
+                attn_output = self.mxfp_attention(query_states, key_states, value_states, is_causal=True, output_dtype=attn_out_dtype)
                 if verbose:
                     o = F.scaled_dot_product_attention(query_states, key_states, value_states,  is_causal=True)
                     precision_metric(attn_output, o)
@@ -134,7 +114,6 @@ def set_mxfp_attn_llama(model, verbose=False, skip_thresh=None, kernel_name=None
             return attn_output, None   # for transformers==4.52.3
 
         layer.self_attn.forward = types.MethodType(new_forward, layer.self_attn)
-        
     
 
 def precision_metric(quant_o, fa2_o, verbose=True, round_num=4): 

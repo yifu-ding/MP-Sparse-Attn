@@ -80,7 +80,7 @@ executor = GPUProcessPoolExecutor()
 
 class MXFPAttention(nn.Module):
     def __init__(self, rearrange_kwargs={}, 
-                 layer_idx=-1, verbose=False, kernel_name=None, skip_thresh=None, mxfp_bw=None):
+                 layer_idx=-1, verbose=False, kernel_name=None, mxfp_bw=None):
         super(MXFPAttention, self).__init__()
         self.layer_idx = layer_idx
         self.head_num = None
@@ -103,9 +103,7 @@ class MXFPAttention(nn.Module):
         # self.tune_pv = tune_pv
         self.verbose = verbose
         self.kernel_name = kernel_name
-        self.skip_thresh = skip_thresh
         self.mxfp_bw = mxfp_bw
-        
     
     # def is_sim(self, o_gt, o_sparse):
     #     if self.sim_rule == "cosine":
@@ -251,6 +249,7 @@ class MXFPAttention(nn.Module):
         tune_mode=False,
         smooth_k=True,
         return_sparsity=False,
+        output_dtype=torch.float16,
     ):
         assert len(q.shape) == 4, "q should be 4-d tensor with B, H, L, D"
             
@@ -320,7 +319,8 @@ class MXFPAttention(nn.Module):
                 tensor_layout=tensor_layout,
                 attention_sink=False,
                 block_scale_type=self.mxfp_bw,
-                skip_thresh=self.skip_thresh,
+                output_dtype=output_dtype,
+                # skip_thresh=self.skip_thresh,
             )
         else:
             o = kernel(

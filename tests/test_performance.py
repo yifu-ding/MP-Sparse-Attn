@@ -6,12 +6,12 @@ import time
 # from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
 from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
-from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
+# from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
 from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 import random
 import os
 
-iter_times = 1
+iter_times = 10
 
 def measure_time(func, *args, **kwargs):
     # # warmup
@@ -46,18 +46,16 @@ def seed_all(seed=1029):
     torch.backends.cudnn.deterministic = True
 
 def test_performance():
-    # 设置随机种子以确保可重复性
-    # torch.manual_seed(42)
+
     seed_all(42)
 
-    # 创建测试数据
     batch_size = 1
     num_heads = 4
-    # seq_len = 256
     qo_len = 130
     kv_len = 1024
     head_dim = 128
     is_causal = True
+    block_scale_type = "mxfp4"
 
     q = torch.randn(batch_size, num_heads, qo_len, head_dim,
                     device='cuda', dtype=torch.float16)
@@ -67,9 +65,8 @@ def test_performance():
                     device='cuda', dtype=torch.float16)
 
     print("Start performance test...")
-    simthreshd = 0.001
-    cdfthreshd = 0.519
-    # cdfthreshd = 0
+    # simthreshd = 0.001
+    # cdfthreshd = 0.519
 
     # 得到一组稀疏率比较好的simthreshd, cdfthreshd
     # for simthreshd in range(1,1000,1):
@@ -132,10 +129,10 @@ def test_performance():
 
     # 总时间
     # print("testing mxfp_attn_kernel...")
-    block_scale_type = "mxfp4"
+    
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
-        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, skip_thresh=10
+        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type
     )
 
     # torch.cuda.empty_cache()
@@ -280,21 +277,16 @@ def test_performance():
         mse_mxfp = torch.nn.functional.mse_loss(out_mxfp, out_torch)
     else:
         mse_mxfp = None
-    # mse_spas = torch.nn.functional.mse_loss(out_spas, out_torch)
-    # mse_spas_full = torch.nn.functional.mse_loss(out_spas_full, out_torch)
-    # mse_spas_cuda = torch.nn.functional.mse_loss(out_spas_cuda, out_torch)
-    # mse_spas_cuda_full = torch.nn.functional.mse_loss(out_spas_cuda_full, out_torch)
-    # mse_fa = torch.nn.functional.mse_loss(out_fa, out_torch)
 
     # import pdb; pdb.set_trace()
     if mse_mxfp is not None:
         print(f"mse_mxfp {block_scale_type} (is_causal={is_causal}): {mse_mxfp:.6f}")
-        print(f"out_mxfp[0][1]: {out_mxfp[0][1]}")
-        print(f"out_torch[0][1]: {out_torch[0][1]}")
+        # print(f"out_mxfp[0][1]: {out_mxfp[0][1]}")
+        # print(f"out_torch[0][1]: {out_torch[0][1]}")
     # print(f"mse_spas: {mse_spas:.6f}, mse_spas_full: {mse_spas_full:.6f}")
     # print(f"mse_spas_cuda: {mse_spas_cuda:.6f}, mse_spas_cuda_full: {mse_spas_cuda_full:.6f}")
     # print(f"mse_fa: {mse_fa:.6f}")
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
 
 
 if __name__ == "__main__":

@@ -12,3 +12,9 @@ wandb/
 spas_sage_attn/*.so
 *.egg-info
 logs/
+saved_files/
+.vscode/
+assets/
+*.hatchet
+*.pth
+mxfp_matmul_bak/

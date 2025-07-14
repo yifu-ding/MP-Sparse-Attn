@@ -1,4 +1,5 @@
 export CUDA_VISIBLE_DEVICES=6
+export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # test our kernel
 # TRITON_INTERPRET=1 python test_online_routing.py
@@ -23,4 +24,4 @@ export CUDA_VISIBLE_DEVICES=6
 # export TRITON_IR_VERBOSE=1
 # export TRITON_PTXAS_VERBOSE=1
 # python ours/mxfp_attn_kernel.py
-python test_performance.py
+python tests/test_performance.py
