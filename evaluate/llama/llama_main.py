@@ -84,7 +84,29 @@ def main():
     assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
     assert args.mxfp_bw in ["mxfp4", "mxfp8"], "mxfp_bw must be in ['mxfp4', 'mxfp8']"
     
-    print(f"***** args: {args} *****")
+    print("***** args *****")
+    print(f"    - model: {args.model}")
+    print(f"    - device: {args.device}")
+    print(f"    - kernel_name: {args.kernel_name}")
+    print(f"    - verbose: {args.verbose}")
+    print(f"    - num_fewshots: {args.num_fewshots}")
+    print(f"    - output_path: {args.output_path}")
+    print(f"    - model_out_path: {args.model_out_path}")
+    print(f"    - compute_accuracy: {args.compute_accuracy}")
+    print(f"    - get_pred: {args.get_pred}")
+    print(f"    - test_speedup: {args.test_speedup}")
+    print(f"    - skip_thresh: {args.skip_thresh}")
+    if args.test_dataset_name:
+        print(f"    - test_dataset_name: {args.test_dataset_name}")
+    else: 
+        print(f"    - test_dataset_name: all")
+    if args.kernel_name == 'mxfp_attn':
+        print(f"    - mxfp_bw: {args.mxfp_bw}")
+    elif args.kernel_name == 'spargeattn':
+        print(f"    - l1: {args.l1}")
+        print(f"    - pv_l1: {args.pv_l1}")
+        print(f"    - tune: {args.tune}")
+    print("*" * 20)
     
     device = torch.device(args.device)
     args.model = args.model.replace("/", "--").lower()

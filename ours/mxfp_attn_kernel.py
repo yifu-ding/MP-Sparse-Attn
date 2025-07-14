@@ -12,7 +12,7 @@ import triton.language as tl
 import triton.profiler as proton
 
 from ours.mxfp import MXFP4Tensor, MXScaleTensor
-from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
+from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 
 
 @torch.compiler.disable
