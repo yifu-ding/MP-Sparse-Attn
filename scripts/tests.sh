@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=6
 
 # test our kernel
 # TRITON_INTERPRET=1 python test_online_routing.py
@@ -19,7 +19,7 @@ export CUDA_VISIBLE_DEVICES=4
 # TRITON_INTERPRET=1 python test_batched_matmul.py
 
 # export TRITON_INTERPRET=1
-export TRITON_DEBUG=1
+# export TRITON_DEBUG=1
 # export TRITON_IR_VERBOSE=1
 # export TRITON_PTXAS_VERBOSE=1
 # python ours/mxfp_attn_kernel.py

@@ -22,27 +22,13 @@ save_files = False
 def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
                      is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
                      output_dtype=torch.float16, return_sparsity=False, block_scale_type="mxfp4", skip_thresh=None):
-    # assert q.size(-2)>=128, "seq_len should be not less than 128."
-
-    if save_files:
-        # 保存输入张量到.pth文件
-        save_dict = {
-            'q': q,
-            'k': k,
-            'v': v
-        }
-        torch.save(save_dict, 'saved_files/input_tensors.pth')
-        print(f"已保存输入张量到文件: saved_files/input_tensors.pth")
-
     torch.cuda.set_device(v.device)
 
     dtype = q.dtype
     if dtype == torch.float32 or dtype == torch.float16:
-        q, k, v = q.contiguous().to(torch.float16), k.contiguous().to(
-            torch.float16), v.contiguous().to(torch.float16)
+        q, k, v = q.contiguous().to(torch.float16), k.contiguous().to(torch.float16), v.contiguous().to(torch.float16)
     else:
-        q, k, v = q.contiguous().to(torch.bfloat16), k.contiguous().to(
-            torch.bfloat16), v.contiguous().to(torch.float16)
+        q, k, v = q.contiguous().to(torch.bfloat16), k.contiguous().to(torch.bfloat16), v.contiguous().to(torch.float16)
 
     # if smooth_k:
     #     k = k - k.mean(dim=-2, keepdim=True)
@@ -56,35 +42,31 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
 
     BLKQ = 128
     if block_scale_type == "mxfp4":
-        a_fp4, a_scale, b_fp4, b_scale = quant_mxfp4(q, k, BLKQ=BLKQ)
+        a_fp4, a_scale, b_fp4, b_scale = quant_mxfp4(q, k, BLKQ=BLKQ, pack_along_lastdim=True)
         a_quant = a_fp4
         b_quant = b_fp4
     elif block_scale_type == "mxfp8":
         a_fp8, a_scale, b_fp8, b_scale = quant_mxfp8e5(q, k, BLKQ=BLKQ)
         a_quant = a_fp8
         b_quant = b_fp8
+    
+    a_quant = a_quant.contiguous()
+    b_quant = b_quant.contiguous()
+    
+    # import pdb; pdb.set_trace()
 
-    # BLOCK_K = 256 if "fp4" in block_scale_type else 128
     VEC_SIZE = 16 if block_scale_type == "nvfp4" else 32
-
-    # torch.Size([1, 4, 512, 128])
-    a_quant = a_quant.reshape(B, H, M, K).contiguous()
-    b_quant = b_quant.reshape(B, H, N, K).contiguous()
-
+    # a_quant = a_quant.reshape(B, H, M, K//VEC_SIZE, VEC_SIZE).contiguous()
+    # b_quant = b_quant.reshape(B, H, N, K//VEC_SIZE, VEC_SIZE).contiguous()
+    
     # 扩展 a_scale 和 b_scale 的第2维度为128的倍数
     M_padded = ((M + 127) // 128) * 128  # 向上取整到128的倍数
     N_padded = ((N + 127) // 128) * 128  # 向上取整到128的倍数
 
-    # # import pdb; pdb.set_trace()
-    # if sum(a_scale!=0).sum().item() != 2080:
-    #     import pdb; pdb.set_trace()
-
     # 扩展 a_scale
     if M_padded > M:
         a_scale_padded = torch.zeros(B, H, M_padded, K//VEC_SIZE, device=a_scale.device, dtype=a_scale.dtype)
-        # 复制原始数据到前 M 的部分
         a_scale_padded[:, :, :M, :] = a_scale
-        # 替换原始变量
         a_scale = a_scale_padded
 
     # 扩展 b_scale
@@ -97,26 +79,42 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     a_scale = a_scale.reshape(B, H, M_padded//128, 4, 32, K //VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
     b_scale = b_scale.reshape(B, H, N_padded//128, 4, 32, K //VEC_SIZE//4, 4).permute(0, 1, 2, 5, 4, 3, 6).contiguous()
 
-    # 保存量化后的张量到.pth文件
-    if save_files: 
-        save_dict = {
-            'a_quant': a_quant,
-            'a_scale': a_scale, 
-            'b_quant': b_quant,
-            'b_scale': b_scale
-        }
-        torch.save(save_dict, 'saved_files/quant_tensors.pth')
-        print(f"已保存量化后的张量到文件: saved_files/quant_tensors.pth")
+    # a_packed, a_scale, b_packed, b_scale, configs, (reference, a_dequant, b_dequant) = \
+    #     initialize_block_scaled_batched_from_tensor(
+    #         a_quant, b_quant, a_scale, b_scale, block_scale_type=block_scale_type, compute_reference=False)
 
-    a_packed, a_scale, b_packed, b_scale, configs, (reference, a_dequant, b_dequant) = \
-        initialize_block_scaled_batched_from_tensor(
-            a_quant, b_quant, a_scale, b_scale, block_scale_type=block_scale_type, compute_reference=False)
+    # B, H, M, K = a_quant.shape
+    # B_b, H_b, N, K_b = b_quant.shape
+    # assert B == B_b, f"batch size不匹配: A.shape[0]={B} != B.shape[0]={B_b}"
+    # assert H == H_b, f"head数量不匹配: A.shape[1]={H} != B.shape[1]={H_b}"
+    # assert K == K_b, f"矩阵维度不匹配: A.shape[3]={K} != B.shape[3]={K_b}"
 
-    # import pdb; pdb.set_trace()
+    BLOCK_M = 128
+    # BLOCK_N = 256
+    BLOCK_N = 128
+    BLOCK_K = 256 if "fp4" in block_scale_type else 128
+    VEC_SIZE = 16 if block_scale_type == "nvfp4" else 32
+    assert block_scale_type in ["nvfp4", "mxfp4", "mxfp8",
+                                "mixed"], f"Invalid block scale type: {block_scale_type}"
+    ELEM_PER_BYTE_A = 2 if "fp4" in block_scale_type else 1
+    ELEM_PER_BYTE_B = 1 if block_scale_type == "mxfp8" else 2
+
+    configs = {
+        "BLOCK_SIZE_M": BLOCK_M,
+        "BLOCK_SIZE_N": BLOCK_N,
+        "BLOCK_SIZE_K": BLOCK_K,
+        "num_stages": 1,
+        "ELEM_PER_BYTE_A": ELEM_PER_BYTE_A,
+        "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
+        "VEC_SIZE": VEC_SIZE,
+    }
+
+    a_packed, b_packed = a_quant, b_quant
+
     # 执行多维批量attn
     output = block_scaled_batched_attn(
         a_packed, a_scale, b_packed, b_scale, v,  is_causal,
-        torch.float16, B, H, M, N, K, configs, skip_thresh=skip_thresh
+        torch.bfloat16, B, H, M, N, K, configs, skip_thresh=skip_thresh
     )
     return output
     # return None
@@ -404,6 +402,8 @@ def block_scaled_batched_attn_kernel(  #
         output_dtype = tl.float16
     elif output_type == 2:
         output_dtype = tl.float8e5
+    elif output_type == 3:
+        output_dtype = tl.bfloat16
 
     # block scale offsets - 参考_attn_fwd的offset计算方式
     offs_sm = (pid_m * (BLOCK_M // WARP_SIZE_M) + tl.arange(0, BLOCK_M // WARP_SIZE_M)) % qo_len  # [1] when pid_m==1
@@ -475,9 +475,6 @@ def block_scaled_batched_attn_kernel(  #
                 qk = tl.dot_scaled(q, scale_q, "e2m1", k, scale_k, "e2m1")  # 128,128
             else:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
-
-            # qk = tl.where(n_mask[None, :], qk, -float("inf"))
-            # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
             # 因果注意力第一阶段计算
             local_m = tl.max(qk, 1)  # [128]
@@ -628,6 +625,8 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori,  is_causa
         dtype_dst = 1
     elif dtype_dst == torch.float8_e5m2:
         dtype_dst = 2
+    elif dtype_dst == torch.bfloat16:
+        dtype_dst = 3
     else:
         raise ValueError(f"Unsupported dtype: {dtype_dst}")
 
@@ -638,7 +637,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori,  is_causa
     # grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), H, B)
 
     # print(f"block_scaled_batched_attn(): is_causal={is_causal}")
-    _, h_qo, qo_len, head_dim = a_desc.shape
+    _, h_qo, qo_len, _ = a_desc.shape
     _, h_kv, kv_len, _ = b_desc.shape
     
     grid = (triton.cdiv(qo_len, BLOCK_M), H, B)
@@ -668,7 +667,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale, v_ori,  is_causa
         dtype_dst, is_causal,
         configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
         # configs["BLOCK_SIZE_K"],
-        configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], head_dim,
+        configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], K,
         configs["num_stages"], USE_2D_SCALE_LOAD=True, qo_len=qo_len, kv_len=kv_len, skip_thresh=skip_thresh)
         # save_files=save_files, scale_q0_ptr=scale_q0_ptr, scale_q1_ptr=scale_q1_ptr, qk0_ptr=qk0_ptr, qk1_ptr=qk1_ptr, scale_q0_ptr_ptr=scale_q0_ptr_ptr, scale_q1_ptr_ptr=scale_q1_ptr_ptr)
 
@@ -723,24 +722,12 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
 
     device = a_tensor.device
 
-    # 验证scale tensor的形状（包含batch和head维度）
-    # M_padded = (M + 127) // 128 * 128
-    # N_padded = (N + 127) // 128 * 128
-    # expected_a_scale_shape = (B, H, M_padded // 128,
-    #                           K // VEC_SIZE // 4, 32, 4, 4)
-    # expected_b_scale_shape = (B, H, N_padded // 128,
-    #                           K // VEC_SIZE // 4, 32, 4, 4)
-    # assert a_scale.shape == expected_a_scale_shape, f"a_scale形状不匹配: 期望{expected_a_scale_shape}, 实际{a_scale.shape}"
-    # assert b_scale.shape == expected_b_scale_shape, f"b_scale形状不匹配: 期望{expected_b_scale_shape}, 实际{b_scale.shape}"
-
    # 根据block_scale_type处理输入数据
-    # import pdb; pdb.set_trace()
     if block_scale_type in ["mxfp8", "mixed"]:
         a = a_tensor.to(torch.float8_e5m2)
         a_ref = a.to(torch.float32) if compute_reference else None
     else:
         # 对于fp4格式, 这里需要将fp16数据转换为packed fp4格式
-        # 简化处理：直接使用原tensor, 实际应用中需要进行fp4 packing
         # a = a_tensor
         a = MXFP4Tensor(data=a_tensor, dtype=torch.uint8)
         a_ref = a.to(torch.float32) if compute_reference else None
@@ -751,24 +738,10 @@ def initialize_block_scaled_batched_from_tensor(a_tensor, b_tensor, a_scale, b_s
         b_ref = b.to(torch.float32) if compute_reference else None
     else:
         # 对于fp4格式, 这里需要将fp16数据转换为packed fp4格式
-        # 简化处理：直接使用原tensor, 实际应用中需要进行fp4 packing
         # b = b_tensor
         b = MXFP4Tensor(data=b_tensor, dtype=torch.uint8)
         b_ref = b.to(torch.float32) if compute_reference else None
         b = b.to_packed_tensor(dim=1)
-
-    # # 简化处理：直接使用mxfp8格式
-    # if block_scale_type == "mxfp8":
-    #     a = a_tensor.to(torch.float8_e5m2)
-    #     b = b_tensor.to(torch.float8_e5m2)
-    #     a_ref = a.to(torch.float32) if compute_reference else None
-    #     b_ref = b.to(torch.float32) if compute_reference else None
-    # else:
-    #     # 对于其他格式，暂时也使用fp8处理
-    #     a = a_tensor.to(torch.float8_e5m2)
-    #     b = b_tensor.to(torch.float8_e5m2)
-    #     a_ref = a.to(torch.float32) if compute_reference else None
-    #     b_ref = b.to(torch.float32) if compute_reference else None
 
     a_desc = a
     b_desc = b

@@ -1,5 +1,5 @@
 # export PYTHONPATH=.
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=6
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # wandb offline
 
@@ -36,10 +36,11 @@ python evaluate/llama/llama_main.py \
     --model Llama-3.2-3B-Instruct \
     --device cuda \
     --output_path ./results \
-    --test_speedup \
     --test_accuracy \
     --kernel_name mxfp_attn \
-    --mxfp_bw mxfp4 \
+    --mxfp_bw mxfp8 \
+    2>&1 | tee ./logs/mxfp_attn_llama-3.2-3b-instruct_mxfp8_test_accuracy.log
+    # --test_speedup \
     # --use_wandb \
 
 

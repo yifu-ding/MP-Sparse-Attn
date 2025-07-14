@@ -282,7 +282,8 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
                     stride_oz, stride_oh, stride_on,
                     stride_sz, stride_sh, stride_sn,
                     sm_scale,
-                    C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
+                    C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
+                    pack_along_lastdim = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
     off_b = tl.program_id(2)
@@ -292,7 +293,6 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     offs_n_32 = tl.arange(0, C//32)
 
     input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
-    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
     scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
 
     x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
@@ -302,8 +302,8 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
     
-    # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
-    emax_elem = 3 # 经验性的
+    # 对于float8，emax_elem = 7 for e4m3, 15 for e5m2
+    emax_elem = 3 
     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
 
     shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
@@ -311,7 +311,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # 这里增加
+    # 这里增加量化的 scale
     
     # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
     # 对于float4 (e2m1)
@@ -332,17 +332,58 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在float8里
     # x_quant = (sign << 7) | (exp << 3) | (mantissa << 2)
     x_quant = (sign << 3) | (exp << 1) | mantissa
-    # x_quant = x_quant.to(tl.float4)
-    # x_quant = sign.reshape(abs_x.shape)
-    # tl.static_print(x_quant)
-    x_quant = x_quant.to(tl.uint8)
-    # x_quant = x_quant.to(tl.float8e5)
+    # x_quant = x_quant.to(tl.uint8)
     
-    # 6. 存储量化后的值和scale
-    x_uint8 = tl.reshape(x_quant, x.shape)
-    tl.store(output_ptrs, x_uint8, mask=offs_n[:, None] < L)
-    # tl.store(scale_ptrs, shared_scale)
-    
+    # Pack two e2m1 elements into a single uint8 along the specified dimension.
+    # x_uint8 = tl.reshape(x_quant, x.shape)
+    if pack_along_lastdim:
+        x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
+        low, high = tl.split(x_quant_reshaped)
+        x_uint8_packed = (high << 4) | low
+        # mask = (offs_n[:, None] < L) & (offs_k[None, :] < C//2)
+        output_ptrs_packed = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + tl.arange(0, C//2)[None, :]
+        tl.store(output_ptrs_packed, x_uint8_packed, mask=offs_n[:, None] < L)
+    else:
+        x_uint8 = tl.reshape(x_quant, x.shape)
+        output_ptrs_unpacked = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+        tl.store(output_ptrs_unpacked, x_uint8, mask=offs_n[:, None] < L)
+    # 6. 存储x
+
+    # def to_packed_tensor(self, dim=1):
+    #     """
+    #     Packs two e2m1 elements into a single uint8 along the specified dimension.
+
+    #     Parameters:
+    #     - dim: The dimension along which to pack the elements.
+
+    #     Returns:
+    #     - A torch tensor of dtype uint8 with two e2m1 elements packed into one uint8.
+    #     """
+    #     data = self.data
+    #     assert 0 <= dim < data.ndim, \
+    #         "The dimension to pack along is not within the range of tensor dimensions"
+
+    #     size_along_dim = data.size(dim)
+    #     new_size_along_dim = (size_along_dim + 1) // 2
+
+    #     # If the size is odd, we pad the data along dim with zeros at the end
+    #     if size_along_dim % 2 != 0:
+    #         pad_sizes = [0] * (2 * data.ndim)
+    #         pad_index = (data.ndim - dim - 1) * 2 + 1
+    #         pad_sizes[pad_index] = 1
+    #         data = torch.nn.functional.pad(data, pad_sizes, mode='constant', value=0)
+
+    #     new_shape = list(data.shape)
+    #     new_shape[dim] = new_size_along_dim
+    #     new_shape.insert(dim + 1, 2)  # packed dimension of length 2
+    #     data = data.reshape(*new_shape)
+
+    #     low = data.select(dim + 1, 0)
+    #     high = data.select(dim + 1, 1)
+    #     packed = (high << 4) | low
+
+    #     return packed
+
     # 存储scale
     # is_invalid = torch.isnan(shared_scale) | torch.isinf(shared_scale) | (shared_scale <= 0)
     # tl.store(scale_ptrs, 255, mask = ~is_invalid)
@@ -453,26 +494,45 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
 #     tl.store(scale_ptrs, shared_scale)
 
 
-def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
-    q_fp4 = torch.empty(q.shape, dtype=torch.uint8, device=q.device)
-    k_fp4 = torch.empty(k.shape, dtype=torch.uint8, device=k.device)
+def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False):
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
+        if pack_along_lastdim:
+            assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
+            assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
+            q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
+            k_fp4 = torch.empty((b, h_kv, kv_len, (head_dim + 1) // 2), dtype=torch.uint8, device=k.device)
+        else:
+            q_fp4 = torch.empty(q.shape, dtype=torch.uint8, device=q.device)
+            k_fp4 = torch.empty(k.shape, dtype=torch.uint8, device=k.device)
+
         stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(1), q.stride(2)
         stride_bz_qo, stride_h_qo, stride_seq_qo = q_fp4.stride(0), q_fp4.stride(1), q_fp4.stride(2)
         stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(1), k.stride(2)
         stride_bz_ko, stride_h_ko, stride_seq_ko = k_fp4.stride(0), k_fp4.stride(1), k_fp4.stride(2)
+
     elif tensor_layout == "NHD":
         b, qo_len, h_qo, head_dim = q.shape
         _, kv_len, h_kv, _ = k.shape
+
+        
+        if pack_along_lastdim:
+            assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
+            assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
+            q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
+            k_fp4 = torch.empty((b, kv_len, h_kv, (head_dim + 1) // 2), dtype=torch.uint8, device=k.device)
+        else:
+            q_fp4 = torch.empty(q.shape, dtype=torch.uint8, device=q.device)
+            k_fp4 = torch.empty(k.shape, dtype=torch.uint8, device=k.device)
 
         stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(2), q.stride(1)
         stride_bz_qo, stride_h_qo, stride_seq_qo = q_fp4.stride(0), q_fp4.stride(2), q_fp4.stride(1)
         stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(2), k.stride(1)
         stride_bz_ko, stride_h_ko, stride_seq_ko = k_fp4.stride(0), k_fp4.stride(2), k_fp4.stride(1)
+
     else:
         raise ValueError(f"Unknown tensor layout: {tensor_layout}")
 
@@ -496,6 +556,7 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         q_scale.stride(0), q_scale.stride(1), q_scale.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
+        pack_along_lastdim=pack_along_lastdim,
         # candidates_ptr=candidates
         # candidate_E_ptr=candidate_E, candidate_M_ptr=candidate_M
     )
@@ -508,6 +569,7 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
         k_scale.stride(0), k_scale.stride(1), k_scale.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
+        pack_along_lastdim=pack_along_lastdim,
         # candidates_ptr=candidates
         # candidate_E_ptr=candidate_E, candidate_M_ptr=candidate_M
     )

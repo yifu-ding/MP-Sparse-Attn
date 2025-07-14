@@ -8,8 +8,10 @@ import numpy as np
 from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
 from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
 from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
+import random
+import os
 
-iter_times = 10
+iter_times = 1
 
 def measure_time(func, *args, **kwargs):
     # # warmup
@@ -33,16 +35,27 @@ def measure_time(func, *args, **kwargs):
 
     return result, elapsed_time
 
+def seed_all(seed=1029):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
 def test_performance():
     # 设置随机种子以确保可重复性
-    torch.manual_seed(42)
+    # torch.manual_seed(42)
+    seed_all(42)
 
     # 创建测试数据
     batch_size = 1
     num_heads = 4
     # seq_len = 256
-    qo_len = 180
-    kv_len = 150
+    qo_len = 130
+    kv_len = 1024
     head_dim = 128
     is_causal = True
 
@@ -119,7 +132,7 @@ def test_performance():
 
     # 总时间
     # print("testing mxfp_attn_kernel...")
-    block_scale_type = "mxfp8"
+    block_scale_type = "mxfp4"
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
         mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, skip_thresh=10
@@ -202,7 +215,7 @@ def test_performance():
         test_sdpa, q, k, v, is_causal=is_causal
     )
 
-    # 测试 flash-attention triton
+    # # 测试 flash-attention triton
     # print("testing flash-attention triton...")
     # def test_flash_attn_triton(q, k, v, is_causal=False):
     #     out = torch.empty_like(q)

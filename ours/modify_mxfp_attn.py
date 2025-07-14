@@ -127,6 +127,7 @@ def set_mxfp_attn_llama(model, verbose=False, skip_thresh=None, kernel_name=None
 
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
+                # import pdb; pdb.set_trace()
                 attn_output = self.o_proj(attn_output)
 
             # return attn_output, None, past_key_value   # for transformers==4.46.3

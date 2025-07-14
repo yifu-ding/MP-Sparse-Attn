@@ -11,3 +11,4 @@ results/
 wandb/
 spas_sage_attn/*.so
 *.egg-info
+logs/
