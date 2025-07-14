@@ -9,11 +9,10 @@ from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
 from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
 from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 
-iter_times = 5
-
+iter_times = 10
 
 def measure_time(func, *args, **kwargs):
-    # warmup
+    # # warmup
     for _ in range(3):
         func(*args, **kwargs)
     torch.cuda.synchronize()
@@ -23,15 +22,16 @@ def measure_time(func, *args, **kwargs):
     end_event = torch.cuda.Event(enable_timing=True)
 
     start_event.record()
+    # save_result_1 = None
     for test_time in range(iter_times):
         result = func(*args, **kwargs)
+        # if save_result_1 is None: save_result_1 = result
     end_event.record()
 
     torch.cuda.synchronize()
     elapsed_time = start_event.elapsed_time(end_event)
 
     return result, elapsed_time
-
 
 def test_performance():
     # 设置随机种子以确保可重复性
@@ -41,8 +41,8 @@ def test_performance():
     batch_size = 1
     num_heads = 4
     # seq_len = 256
-    qo_len = 128
-    kv_len = 130
+    qo_len = 130
+    kv_len = 150
     head_dim = 128
     is_causal = False
 

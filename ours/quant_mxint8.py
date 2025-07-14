@@ -55,7 +55,7 @@ def quant_fpxint8_kernel(Input, Output, Scale, L,
 
     # 存储每32个元素的scale
     scales = scales.to(tl.float8e5)
-    tl.store(scale_ptrs, scales)
+    tl.store(scale_ptrs, scales, mask=offs_n[:, None] < L)
 
 
 def quant_fpxint8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
@@ -165,7 +165,7 @@ def quant_fpxint8_warp(q, k, BLKQ=128, WARPQ=32, BLKK=64, WARPK=64, tensor_layou
 def quant_mxfp8e5_kernel(Input, Output, Scale, L,
                     stride_iz, stride_ih, stride_in,
                     stride_oz, stride_oh, stride_on,
-                    stride_sz, stride_sh, stride_sn,
+                    stride_sz, stride_sh, stride_sn,  # b, h_qo, qo_len, head_dim // 32
                     sm_scale,
                     C: tl.constexpr, BLK: tl.constexpr):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
@@ -184,8 +184,8 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     x = x.to(tl.float32)
     x *= sm_scale
 
-    x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
-    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
+    x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]  --> [BLKQ, 4, 32]
+    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32] --> [BLKQ, 4]
     
     # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
     emax_elem = 15 # 经验性的
@@ -197,7 +197,6 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
     # 这里增加一个量化的 scale
-    
     
     # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
     x_quant = tl.clamp(x_quant, -57344, 57344)  # e5m2 range
@@ -216,7 +215,11 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     e_biased = e + 127
     # e_biased_int = e_biased
     e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
-    tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8))
+    # 检查是否有0值
+    # if tl.min(e_biased_clamped) == 0:
+    #     import pdb; pdb.set_trace()
+    tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8), mask=offs_n[:, None] < L)
+    # t = tl.load(scale_ptrs)
 
     # tl.store(scale_ptrs, shared_scale)
 
@@ -348,106 +351,106 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     e_biased = e + 127
     # e_biased_int = e_biased
     e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
-    tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8))
+    tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8), mask=offs_n[:, None] < L)
 
 
-# 没用上
-@triton.jit
-def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
-                    stride_iz, stride_ih, stride_in,
-                    stride_oz, stride_oh, stride_on,
-                    stride_sz, stride_sh, stride_sn,
-                    sm_scale,
-                    C: tl.constexpr, BLK: tl.constexpr,
-                    candidates_ptr, 
-                    # candidate_E_ptr, candidate_M_ptr
-                    ):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
-    # idx = tl.arange(0, 8)
-    # candidates = tl.load(candidates_ptr + idx)
-    # candidate_M = tl.load(candidate_M_ptr + idx)
+# # 没用上
+# @triton.jit
+# def quant_mxfp4_kernel_group_minerror_fixed(Input, Output, Scale, L,
+#                     stride_iz, stride_ih, stride_in,
+#                     stride_oz, stride_oh, stride_on,
+#                     stride_sz, stride_sh, stride_sn,
+#                     sm_scale,
+#                     C: tl.constexpr, BLK: tl.constexpr,
+#                     candidates_ptr, 
+#                     # candidate_E_ptr, candidate_M_ptr
+#                     ):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
+#     # idx = tl.arange(0, 8)
+#     # candidates = tl.load(candidates_ptr + idx)
+#     # candidate_M = tl.load(candidate_M_ptr + idx)
 
-    # 预定义候选值，避免重复计算
-    candidates = tl.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], type=tl.float32)
+#     # 预定义候选值，避免重复计算
+#     candidates = tl.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], type=tl.float32)
 
-    off_blk = tl.program_id(0)
-    off_h = tl.program_id(1)
-    off_b = tl.program_id(2)
+#     off_blk = tl.program_id(0)
+#     off_h = tl.program_id(1)
+#     off_b = tl.program_id(2)
 
-    offs_n = off_blk * BLK + tl.arange(0, BLK)
-    offs_k = tl.arange(0, C)
-    offs_n_32 = tl.arange(0, C//32)
+#     offs_n = off_blk * BLK + tl.arange(0, BLK)
+#     offs_k = tl.arange(0, C)
+#     offs_n_32 = tl.arange(0, C//32)
 
-    input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
-    output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
-    scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
+#     input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
+#     output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
+#     scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
 
-    x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
-    x = x.to(tl.float32)
-    x *= sm_scale
+#     x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
+#     x = x.to(tl.float32)
+#     x *= sm_scale
 
-    x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
-    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
+#     x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
+#     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # [BLK, C//32]
     
-    # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
-    emax_elem = 3 # 经验性的
-    shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
+#     # 对于float16，emax_elem = 7 for e4m3, 15 for e5m2
+#     emax_elem = 3 # 经验性的
+#     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem  # 这个得是>e-4, 尽量到e-4
 
-    shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
+#     shared_scale = tl.exp2(shared_exp) # 形式上是fp32, 但其实数值上是e-4
     
-    shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
-    x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
+#     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
+#     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
   
-    # 获取符号位
-    S = tl.where(x_quant >= 0, 0, 1)
-    abs_x = tl.abs(x_quant)
-    # 判断是否为0或无效值
-    is_zero = (abs_x == 0)
+#     # 获取符号位
+#     S = tl.where(x_quant >= 0, 0, 1)
+#     abs_x = tl.abs(x_quant)
+#     # 判断是否为0或无效值
+#     is_zero = (abs_x == 0)
 
-    # **关键优化：避免大张量，直接在原维度上计算**
-    # 初始化最佳候选索引
-    best_indices = tl.zeros_like(abs_x).to(tl.int32)
-    min_error = tl.full(abs_x.shape, float('10000'), dtype=tl.float32)
+#     # **关键优化：避免大张量，直接在原维度上计算**
+#     # 初始化最佳候选索引
+#     best_indices = tl.zeros_like(abs_x).to(tl.int32)
+#     min_error = tl.full(abs_x.shape, float('10000'), dtype=tl.float32)
     
-    # 逐个候选值计算，避免大的broadcast
-    for i in tl.static_range(8):
-        candidate_val = candidates[i]
-        # candidate_val = tl.load(candidates_ptr + i)
-        # candidate_val = i
-        current_error = tl.abs(abs_x - candidate_val)
+#     # 逐个候选值计算，避免大的broadcast
+#     for i in tl.static_range(8):
+#         candidate_val = candidates[i]
+#         # candidate_val = tl.load(candidates_ptr + i)
+#         # candidate_val = i
+#         current_error = tl.abs(abs_x - candidate_val)
         
-        # 更新最小误差和索引
-        is_better = current_error < min_error
-        min_error = tl.where(is_better, current_error, min_error)
-        best_indices = tl.where(is_better, i, best_indices)
+#         # 更新最小误差和索引
+#         is_better = current_error < min_error
+#         min_error = tl.where(is_better, current_error, min_error)
+#         best_indices = tl.where(is_better, i, best_indices)
     
-    # 处理平局情况 - 优先选择偶数尾数
-    # for i in tl.static_range(8):
-    #     # candidate_val = candidates[i]
-    #     candidate_val = tl.load(candidates_ptr + i)
-    #     is_tie = tl.abs(tl.abs(abs_x - candidate_val) - min_error) < 1e-6
-    #     is_even_mantissa = (tl.load(candidate_M_ptr + i) == 0)
-    #     should_prefer = is_tie & is_even_mantissa
-    #     best_indices = tl.where(should_prefer, i, best_indices)
+#     # 处理平局情况 - 优先选择偶数尾数
+#     # for i in tl.static_range(8):
+#     #     # candidate_val = candidates[i]
+#     #     candidate_val = tl.load(candidates_ptr + i)
+#     #     is_tie = tl.abs(tl.abs(abs_x - candidate_val) - min_error) < 1e-6
+#     #     is_even_mantissa = (tl.load(candidate_M_ptr + i) == 0)
+#     #     should_prefer = is_tie & is_even_mantissa
+#     #     best_indices = tl.where(should_prefer, i, best_indices)
 
-    # 直接计算E和M，避免额外的reshape
-    E = best_indices // 2
-    M = best_indices % 2
-    # E = tl.load(candidate_E_ptr + best_indices)
-    # M = tl.load(candidate_M_ptr + best_indices)
+#     # 直接计算E和M，避免额外的reshape
+#     E = best_indices // 2
+#     M = best_indices % 2
+#     # E = tl.load(candidate_E_ptr + best_indices)
+#     # M = tl.load(candidate_M_ptr + best_indices)
     
-    # import pdb; pdb.set_trace()
-    # 处理0
-    # E = tl.where(is_zero, 0, E)
-    # M = tl.where(is_zero, 0, M)
+#     # import pdb; pdb.set_trace()
+#     # 处理0
+#     # E = tl.where(is_zero, 0, E)
+#     # M = tl.where(is_zero, 0, M)
     
-    # 组合成最终的量化值
-    x_quant = (S << 3) | (E << 1) | M
-    x_quant = x_quant.to(tl.uint8)
+#     # 组合成最终的量化值
+#     x_quant = (S << 3) | (E << 1) | M
+#     x_quant = x_quant.to(tl.uint8)
 
-    # 6. 存储量化后的值和scale
-    x_uint8 = tl.reshape(x_quant, x.shape)
-    tl.store(output_ptrs, x_uint8, mask=offs_n[:, None] < L)
-    tl.store(scale_ptrs, shared_scale)
+#     # 6. 存储量化后的值和scale
+#     x_uint8 = tl.reshape(x_quant, x.shape)
+#     tl.store(output_ptrs, x_uint8, mask=offs_n[:, None] < L)
+#     tl.store(scale_ptrs, shared_scale)
 
 
 def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
