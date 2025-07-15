@@ -7,11 +7,12 @@ import time
 import numpy as np
 from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
 # from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
-from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
+from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 import random
 import os
+from ours.modify_mxfp_attn import precision_metric
 
-iter_times = 100
+iter_times = 200
 
 def measure_time(func, *args, **kwargs):
     # # warmup
@@ -24,10 +25,8 @@ def measure_time(func, *args, **kwargs):
     end_event = torch.cuda.Event(enable_timing=True)
 
     start_event.record()
-    # save_result_1 = None
     for test_time in range(iter_times):
         result = func(*args, **kwargs)
-        # if save_result_1 is None: save_result_1 = result
     end_event.record()
 
     torch.cuda.synchronize()
@@ -47,15 +46,16 @@ def seed_all(seed=1029):
 
 def test_performance():
 
-    seed_all(42)
+    seed_all(41)
 
     batch_size = 1
     num_heads = 24
-    qo_len = 130
+    qo_len = 1024
     kv_len = 1024
     head_dim = 128
     is_causal = True
-    block_scale_type = "mxfp4"
+    block_scale_type = "mxfp8"
+    smooth_k = False 
 
     q = torch.randn(batch_size, num_heads, qo_len, head_dim,
                     device='cuda', dtype=torch.float16)
@@ -132,7 +132,7 @@ def test_performance():
     
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
-        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type
+        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, smooth_k=smooth_k
     )
 
     # torch.cuda.empty_cache()
@@ -275,6 +275,7 @@ def test_performance():
     # 计算mse
     if out_mxfp is not None:
         mse_mxfp = torch.nn.functional.mse_loss(out_mxfp, out_torch)
+        precision_metric(out_mxfp, out_torch, verbose=True)
     else:
         mse_mxfp = None
 

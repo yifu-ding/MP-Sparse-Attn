@@ -16,9 +16,8 @@ from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
 
 
 @torch.compiler.disable
-def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
-                     is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
-                     output_dtype=torch.float16, return_sparsity=False, block_scale_type="mxfp4"):
+def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
+                     output_dtype=torch.bfloat16, return_sparsity=False, block_scale_type="mxfp4", return_quant_tensor=False):
     torch.cuda.set_device(v.device)
 
     dtype = q.dtype
@@ -27,8 +26,8 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     else:
         q, k, v = q.contiguous().to(torch.bfloat16), k.contiguous().to(torch.bfloat16), v.contiguous().to(torch.float16)
 
-    # if smooth_k:
-    #     k = k - k.mean(dim=-2, keepdim=True)
+    if smooth_k:
+        k = k - k.mean(dim=-2, keepdim=True)
 
     B, H, M, K = q.shape 
     N = k.shape[2]
@@ -38,9 +37,17 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
     assert K in [128], "headdim should be in [128]."
 
     BLKQ = 128
+    ret_dict = None
     if block_scale_type == "mxfp4":
-        pack_along_lastdim = False  # True: kernel fusion support for pack fp4 tensor into uint8 tensor
+        pack_along_lastdim = True  # True: kernel fusion support for pack fp4 tensor into uint8 tensor
         a_fp4, a_scale, b_fp4, b_scale = quant_mxfp4(q, k, BLKQ=BLKQ, pack_along_lastdim=pack_along_lastdim)
+        if return_quant_tensor:
+            ret_dict = {
+                "a_fp4": a_fp4,
+                "a_scale": a_scale,
+                "b_fp4": b_fp4,
+                "b_scale": b_scale
+            }
         if not pack_along_lastdim:
             a_fp4 = MXFP4Tensor(data=a_fp4, dtype=torch.uint8)
             a_fp4 = a_fp4.to_packed_tensor(dim=len(a_fp4.data.shape) - 1)
@@ -100,7 +107,10 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0,
         a_quant, a_scale, b_quant, b_scale, v,  is_causal,
         output_dtype, B, H, M, N, K, configs
     )
-    return output
+    if return_quant_tensor:
+        return output, ret_dict
+    else:
+        return output
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
@@ -256,25 +266,29 @@ def block_scaled_batched_attn_kernel(  #
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k, scale_k, "e5m2")
 
             # 因果注意力第一阶段计算
-            local_m = tl.max(qk, 1)  # [128]
-            new_m = tl.maximum(old_m, local_m)
-            qk = qk - new_m[:, None]
+            mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
+            mask_sum = tl.sum(tl.sum(mask, axis=0))
+            # if True:
+            if mask_sum > 0:   # 好像是对的，但收益不多
+                local_m = tl.max(qk, 1)  # [128]
+                new_m = tl.maximum(old_m, local_m)
+                qk = qk - new_m[:, None]
 
-            p = tl.math.exp2(qk)
-            l_ij = tl.sum(p, 1)
-            alpha = tl.math.exp2(old_m - new_m)
-            l_i = l_i * alpha + l_ij
-            acc = acc * alpha[:, None]
-            
-            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
-            p = p.to(tl.float16)
-            acc += tl.dot(p, v, out_dtype=tl.float16)
-            old_m = new_m
+                p = tl.math.exp2(qk)
+                l_ij = tl.sum(p, 1)
+                alpha = tl.math.exp2(old_m - new_m)
+                l_i = l_i * alpha + l_ij
+                acc = acc * alpha[:, None]
+                
+                v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
+                p = p.to(tl.float16)
+                acc += tl.dot(p, v, out_dtype=tl.float16)
+                old_m = new_m
 
-            k_ptrs += BLOCK_N * stride_kn
-            v_ptrs += BLOCK_N * stride_vn
-            if USE_2D_SCALE_LOAD:
-                k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
+                k_ptrs += BLOCK_N * stride_kn
+                v_ptrs += BLOCK_N * stride_vn
+                if USE_2D_SCALE_LOAD:
+                    k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
 
         # 因果注意力第二阶段
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M

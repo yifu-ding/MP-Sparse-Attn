@@ -25,3 +25,4 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 # export TRITON_PTXAS_VERBOSE=1
 # python ours/mxfp_attn_kernel.py
 python tests/test_performance.py
+# python scripts/debug2.py

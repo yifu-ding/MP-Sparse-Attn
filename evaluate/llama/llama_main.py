@@ -77,6 +77,7 @@ def main():
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
     parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "native", 'spargeattn'])
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
+    parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     
 
     # 解析参数
@@ -102,6 +103,7 @@ def main():
         print(f"    - test_dataset_name: all")
     if args.kernel_name == 'mxfp_attn':
         print(f"    - mxfp_bw: {args.mxfp_bw}")
+        print(f"    - smooth_k: {args.smooth_k}")
     elif args.kernel_name == 'spargeattn':
         print(f"    - l1: {args.l1}")
         print(f"    - pv_l1: {args.pv_l1}")
@@ -245,7 +247,7 @@ def main():
         set_spas_sage_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name)
         print("replace outline_routing!")
     elif args.kernel_name == "mxfp_attn":
-        set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw)
+        set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw, smooth_k=args.smooth_k)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
     else:
         print("use the original transformer attention!")

@@ -147,8 +147,6 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # 这里增加一个量化的 scale
-    
     # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
     x_quant = tl.clamp(x_quant, -57344, 57344)  # e5m2 range
     # x_quant = tl.clamp(x_quant, -448, 448)  # e4m3 range

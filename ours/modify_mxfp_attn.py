@@ -13,13 +13,14 @@ import types
 from ours.kernel_selection import MXFPAttention
 
 
-def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None):
+def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False):
     for layer_id, layer in enumerate(model.model.layers):
 
         setattr(layer.self_attn, 'mxfp_attention', MXFPAttention(layer_idx=layer_id, 
                                                                     verbose=verbose,
                                                                     kernel_name=kernel_name,
-                                                                    mxfp_bw=mxfp_bw))
+                                                                    mxfp_bw=mxfp_bw, 
+                                                                    smooth_k=smooth_k))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
         old_forward = layer.self_attn.forward
@@ -94,16 +95,25 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None):
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
                 attn_output = self.o_proj(attn_output)
-                # import pdb; pdb.set_trace()  # no?
             else:
                 key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
                 attn_out_dtype = self.o_proj.weight.dtype
                 attn_output = self.mxfp_attention(query_states, key_states, value_states, is_causal=True, output_dtype=attn_out_dtype)
                 if verbose:
-                    o = F.scaled_dot_product_attention(query_states, key_states, value_states,  is_causal=True)
-                    precision_metric(attn_output, o)
-
+                    o = F.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
+                    sim_dict = precision_metric(attn_output, o)
+                    if sim_dict['Cossim'] < 0.5:
+                        # import pdb; pdb.set_trace()
+                        torch.save({
+                            'query_states': query_states.detach().cpu(),
+                            'key_states': key_states.detach().cpu(), 
+                            'value_states': value_states.detach().cpu(),
+                            'attn_output': attn_output.detach().cpu(),
+                            'o': o.detach().cpu()
+                        }, 'saved_files/low_sim_attn_states.pth')
+                        print(f"save low sim attn states to saved_files/low_sim_attn_states.pth")
+                        exit()
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
                 attn_output = self.o_proj(attn_output)

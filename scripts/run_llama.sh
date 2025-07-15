@@ -46,8 +46,10 @@ python evaluate/llama/llama_main.py \
     --test_dataset_name dureader \
     --mxfp_bw $BITWIDTH \
     --kernel_name $KERNEL_NAME \
-    2>&1 | tee $OUTPUT_PATH/log.log
+    --verbose \
+    2>&1 | tee $OUTPUT_PATH/debug.log
     # --test_speedup \
+    # --smooth_k \
     # --use_wandb \
 
 

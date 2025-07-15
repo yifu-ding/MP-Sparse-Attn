@@ -1,9 +1,9 @@
 import torch
 # from spas_sage_attn.quant_per_block import per_block_int8
-from ours.quant_mxint8 import quant_fpxint8, quant_mxfp8e5, quant_mxfp4
+from ours.quant_kernels import quant_mxfp8e5, quant_mxfp4
 
-from ours.block_scaled_matmul import initialize_block_scaled_from_tensor, block_scaled_matmul
-from ours.batched_block_scaled_matmul import initialize_block_scaled_batched_from_tensor, block_scaled_batched_matmul
+from mxfp_matmul_bak.block_scaled_matmul import initialize_block_scaled_from_tensor, block_scaled_matmul
+from mxfp_matmul_bak.batched_block_scaled_matmul import initialize_block_scaled_batched_from_tensor, block_scaled_batched_matmul
 
 def test_per_block_int8():
     # Set random seed for reproducibility
@@ -291,6 +291,76 @@ def test_quant_mxfp4(q, k,
 
     # return mse_loss.item(), max_error.item()
     # return k_fp4, k_scale
+
+
+def test_quant_mxfp4_input_quant_tensor(q_fp4, k_fp4, q_scale, k_scale, head_dim = 128):
+
+    # Extract sign, exp, mantissa from uint8
+    sign = (q_fp4 >> 3) & 0x1  # Highest bit is sign bit
+    exp = (q_fp4 >> 1) & 0x3   # Next 2 bits are exponent bits
+    mantissa = q_fp4 & 0x1  # Last bit is mantissa bit
+    
+    # Rebuild float value
+    # 1. Calculate mantissa part
+    mantissa_value = torch.where(exp == 0, mantissa.float() * 0.5, 1.0 + mantissa.float() * 0.5)
+    # 2. Calculate exponent part: 2^exp
+    bias = 1.0
+    exp_value = torch.pow(2.0, exp.float() - bias)
+    # 3. Apply sign bit
+    q_fp4_float = mantissa_value * exp_value
+    q_fp4_float = torch.where(sign.bool(), -q_fp4_float, q_fp4_float)
+    # import pdb; pdb.set_trace()
+    # Dequantize
+    # q_scale: (b, h, seq_len, head_dim//32)
+    # First repeat_interleave 32 in last dimension to get (b, h, seq_len, head_dim)
+    q_scale_expanded = q_scale.repeat_interleave(32, dim=-1)
+    k_scale_expanded = k_scale.repeat_interleave(32, dim=-1)
+    q_dequant = q_fp4_float.float() * q_scale_expanded
+    
+    # Calculate quantization error
+    # mse_loss = torch.nn.functional.mse_loss(q_dequant, q.float() * (head_dim ** -0.5))
+    # max_error = torch.max(torch.abs(q_dequant - q.float() * (head_dim ** -0.5)))
+    
+    # print(f"Float4 MX format MSE loss after quantization: {mse_loss.item():.6f}")
+    # print(f"Float4 MX format maximum absolute error: {max_error.item():.6f}")
+
+    # Calculate QK 
+    # qk_ref = torch.matmul(q.float(), k.float().transpose(-2, -1)) * (head_dim ** -0.5)
+
+    sign = (k_fp4 >> 3) & 0x1  # Highest bit is sign bit
+    exp = (k_fp4 >> 1) & 0x3   # Next 2 bits are exponent bits
+    mantissa = k_fp4 & 0x1  # Last bit is mantissa bit
+    
+    mantissa_value = torch.where(exp == 0, mantissa.float() * 0.5, 1.0 + mantissa.float() * 0.5)
+    bias = 1.0
+    exp_value = torch.pow(2.0, exp.float() - bias)
+    k_fp4_float = mantissa_value * exp_value
+    k_fp4_float = torch.where(sign.bool(), -k_fp4_float, k_fp4_float)
+    k_dequant = k_fp4_float * k_scale_expanded
+    
+    # Then calculate QK
+    qk_quant = torch.matmul(q_dequant, k_dequant.transpose(-2, -1))
+    
+    return qk_quant
+
+    # # Calculate QK quantization error
+    # qk_mse_loss = torch.nn.functional.mse_loss(qk_quant, qk_ref)
+    # qk_max_error = torch.max(torch.abs(qk_quant - qk_ref) / (qk_ref+1e-6))
+    
+    # print(f"Float4 MX format QK MSE loss after quantization: {qk_mse_loss.item():.6f}")
+    # print(f"Float4 MX format QK maximum absolute error (relative): {qk_max_error.item():.6f}")
+    # # print(f"qk_quant in manual fp4: {qk_quant}")
+    
+    # # Calculate error after softmax
+    # qk_ref_softmax = torch.nn.functional.softmax(qk_ref, dim=-1)
+    # qk_quant_softmax = torch.nn.functional.softmax(qk_quant, dim=-1)
+    
+    # softmax_mse_loss = torch.nn.functional.mse_loss(qk_quant_softmax, qk_ref_softmax)
+    # softmax_max_error = torch.max(torch.abs(qk_quant_softmax - qk_ref_softmax) / (qk_ref_softmax+1e-6))
+    
+    # print(f"Float4 MX format MSE loss after softmax: {softmax_mse_loss.item():.6f}")
+    # print(f"Float4 MX format maximum absolute error after softmax (relative): {softmax_max_error.item():.6f}")
+
 
 
 def test_quant_mxfpx_block_scaled(q, k, block_scale_type="mxfp4", head_dim=256, batch_size=1, num_heads=1, seq_len=256, BLKQ=128):
