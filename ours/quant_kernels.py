@@ -165,7 +165,7 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     e_biased_clamped = tl.clamp(e_biased, 0, 254)
     tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8), mask=offs_n[:, None] < L)
 
-def quant_mxfp8e5(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
+def quant_mxfp8e5(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND"):
     q_fp8 = torch.empty(q.shape, dtype=torch.float8_e5m2, device=q.device)
     k_fp8 = torch.empty(k.shape, dtype=torch.float8_e5m2, device=k.device)
 
@@ -219,10 +219,11 @@ def quant_mxfp8e5(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
 
 
 @triton.jit
-def quant_mxfp4_kernel(Input, Output, Scale, L,
+def quant_mxfp4_kernel(Input, Output, Scale, Scale_2, L,
                     stride_iz, stride_ih, stride_in,
                     stride_oz, stride_oh, stride_on,
                     stride_sz, stride_sh, stride_sn,
+                    stride_sz_2, stride_sh_2, stride_sn_2,
                     sm_scale,
                     C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
                     pack_along_lastdim = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
@@ -236,10 +237,17 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
 
     input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
     scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
+    scale_ptrs_2 = Scale_2 + off_b * stride_sz_2 + off_h * stride_sh_2 + off_blk  # per block scale
 
     x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
     x = x.to(tl.float32)
     x *= sm_scale
+
+    # 这里增加量化的 scale
+    scale = tl.max(tl.abs(x)) / 6.0  # mxfp4 range: [-6, 6]
+    scale += 0.0000001
+    x = x / scale
+    tl.store(scale_ptrs_2, scale)
 
     x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # abs_max shape: [BLK, C//32]
@@ -250,8 +258,6 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
         
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
-    
-    # 这里增加量化的 scale
     
     x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
     # float4 (e2m1) range: [-6, 6]
@@ -297,7 +303,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, L,
     tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8), mask=offs_n[:, None] < L)
 
 
-def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False):
+def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False, dual_scale=False):
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
@@ -341,16 +347,23 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND", pac
 
     q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.uint8)
     k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.uint8)
+    # if double_scale:
+    # q_scale_2 = torch.empty((b, h_qo, head_dim), device=q.device, dtype=torch.float16)
+    # k_scale_2 = torch.empty((b, h_kv, head_dim), device=q.device, dtype=torch.float16)
+    
+    q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+    k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32)
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
 
     grid = ((qo_len + BLKQ - 1) // BLKQ, h_qo, b)
     quant_mxfp4_kernel[grid](
-        q, q_fp4, q_scale, qo_len,
+        q, q_fp4, q_scale, q_scale_2, qo_len,
         stride_bz_q, stride_h_q, stride_seq_q,
         stride_bz_qo, stride_h_qo, stride_seq_qo,
         q_scale.stride(0), q_scale.stride(1), q_scale.stride(2),
+        q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
         pack_along_lastdim=pack_along_lastdim,
@@ -358,13 +371,17 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND", pac
     
     grid = ((kv_len + BLKK - 1) // BLKK, h_kv, b)
     quant_mxfp4_kernel[grid](
-        k, k_fp4, k_scale, kv_len,
+        k, k_fp4, k_scale, k_scale_2, kv_len,
         stride_bz_k, stride_h_k, stride_seq_k,
         stride_bz_ko, stride_h_ko, stride_seq_ko,
         k_scale.stride(0), k_scale.stride(1), k_scale.stride(2),
+        k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
         pack_along_lastdim=pack_along_lastdim,
     )
 
-    return q_fp4, q_scale, k_fp4, k_scale
+    # if dual_scale:
+    return q_fp4, q_scale, k_fp4, k_scale, q_scale_2, k_scale_2
+    # else:
+    #     return q_fp4, q_scale, k_fp4, k_scale, None, None

@@ -12,13 +12,13 @@ import random
 import os
 from ours.modify_mxfp_attn import precision_metric
 
-iter_times = 200
+iter_times = 1000
 
 def measure_time(func, *args, **kwargs):
     # # warmup
-    for _ in range(3):
-        func(*args, **kwargs)
-    torch.cuda.synchronize()
+    # for _ in range(3):
+    #     func(*args, **kwargs)
+    # torch.cuda.synchronize()
 
     # testing
     start_event = torch.cuda.Event(enable_timing=True)
@@ -54,8 +54,9 @@ def test_performance():
     kv_len = 1024
     head_dim = 128
     is_causal = True
-    block_scale_type = "mxfp8"
+    block_scale_type = "mxfp4"
     smooth_k = False 
+    dual_scale = True
 
     q = torch.randn(batch_size, num_heads, qo_len, head_dim,
                     device='cuda', dtype=torch.float16)
@@ -132,7 +133,7 @@ def test_performance():
     
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
-        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, smooth_k=smooth_k
+        mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, smooth_k=smooth_k, dual_scale=dual_scale
     )
 
     # torch.cuda.empty_cache()

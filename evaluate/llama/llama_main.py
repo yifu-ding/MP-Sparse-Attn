@@ -58,7 +58,7 @@ def main():
 
     # dataset 
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
-    parser.add_argument('--test_dataset_name', type=str, default=None, help="Evaluate on single dataset")
+    parser.add_argument('--test_dataset_name', type=str, default='all', help="Evaluate on single dataset")
 
     # output path
     parser.add_argument('--output_path', type=str, default="results",
@@ -78,6 +78,7 @@ def main():
     parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "native", 'spargeattn'])
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
+    parser.add_argument('--dual_scale', action='store_true', help="dual scale")
     
 
     # 解析参数
@@ -97,13 +98,11 @@ def main():
     print(f"    - get_pred: {args.get_pred}")
     print(f"    - test_speedup: {args.test_speedup}")
     print(f"    - skip_thresh: {args.skip_thresh}")
-    if args.test_dataset_name:
-        print(f"    - test_dataset_name: {args.test_dataset_name}")
-    else: 
-        print(f"    - test_dataset_name: all")
+    print(f"    - test_dataset_name: {args.test_dataset_name}")
     if args.kernel_name == 'mxfp_attn':
         print(f"    - mxfp_bw: {args.mxfp_bw}")
         print(f"    - smooth_k: {args.smooth_k}")
+        print(f"    - dual_scale: {args.dual_scale}")
     elif args.kernel_name == 'spargeattn':
         print(f"    - l1: {args.l1}")
         print(f"    - pv_l1: {args.pv_l1}")
@@ -141,7 +140,7 @@ def main():
                     "dureader", "gov_report", "qmsum", "multi_news", "vcsum", "trec", "triviaqa", "samsum", "lsht", \
                     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", "lcc", "repobench-p"]
     
-    if args.test_dataset_name:  # only test on one dataset
+    if args.test_dataset_name != "all":  # only test on one dataset
         datasets = [args.test_dataset_name]
     
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
@@ -247,7 +246,8 @@ def main():
         set_spas_sage_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name)
         print("replace outline_routing!")
     elif args.kernel_name == "mxfp_attn":
-        set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw, smooth_k=args.smooth_k)
+        set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw, \
+            smooth_k=args.smooth_k, dual_scale=args.dual_scale)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
     else:
         print("use the original transformer attention!")

@@ -13,14 +13,15 @@ import types
 from ours.kernel_selection import MXFPAttention
 
 
-def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False):
+def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False, dual_scale=False):
     for layer_id, layer in enumerate(model.model.layers):
 
         setattr(layer.self_attn, 'mxfp_attention', MXFPAttention(layer_idx=layer_id, 
                                                                     verbose=verbose,
                                                                     kernel_name=kernel_name,
                                                                     mxfp_bw=mxfp_bw, 
-                                                                    smooth_k=smooth_k))
+                                                                    smooth_k=smooth_k,
+                                                                    dual_scale=dual_scale))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
         old_forward = layer.self_attn.forward
@@ -105,14 +106,14 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, sm
                     sim_dict = precision_metric(attn_output, o)
                     if sim_dict['Cossim'] < 0.5:
                         # import pdb; pdb.set_trace()
-                        torch.save({
-                            'query_states': query_states.detach().cpu(),
-                            'key_states': key_states.detach().cpu(), 
-                            'value_states': value_states.detach().cpu(),
-                            'attn_output': attn_output.detach().cpu(),
-                            'o': o.detach().cpu()
-                        }, 'saved_files/low_sim_attn_states.pth')
-                        print(f"save low sim attn states to saved_files/low_sim_attn_states.pth")
+                        # torch.save({
+                        #     'query_states': query_states.detach().cpu(),
+                        #     'key_states': key_states.detach().cpu(), 
+                        #     'value_states': value_states.detach().cpu(),
+                        #     'attn_output': attn_output.detach().cpu(),
+                        #     'o': o.detach().cpu()
+                        # }, 'saved_files/low_sim_attn_states.pth')
+                        # print(f"save low sim attn states to saved_files/low_sim_attn_states.pth")
                         exit()
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
