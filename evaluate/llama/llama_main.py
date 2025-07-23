@@ -75,7 +75,7 @@ def main():
     
     # our method
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
-    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "native", 'spargeattn'])
+    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "mxfp_attn_debug", "native", 'spargeattn'])
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
@@ -84,7 +84,7 @@ def main():
     # 解析参数
     args = parser.parse_args()
     assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
-    assert args.mxfp_bw in ["mxfp4", "mxfp8"], "mxfp_bw must be in ['mxfp4', 'mxfp8']"
+    assert args.mxfp_bw in ["mxfp4", "mxfp8", 'nvfp4', 'mxfp8_diag'], "mxfp_bw must be in ['mxfp4', 'mxfp8', 'nvfp4', 'mxfp8_diag']"
     
     print("***** args *****")
     print(f"    - model: {args.model}")
@@ -99,11 +99,11 @@ def main():
     print(f"    - test_speedup: {args.test_speedup}")
     print(f"    - skip_thresh: {args.skip_thresh}")
     print(f"    - test_dataset_name: {args.test_dataset_name}")
-    if args.kernel_name == 'mxfp_attn':
+    if "mxfp_attn" in args.kernel_name:
         print(f"    - mxfp_bw: {args.mxfp_bw}")
         print(f"    - smooth_k: {args.smooth_k}")
         print(f"    - dual_scale: {args.dual_scale}")
-    elif args.kernel_name == 'spargeattn':
+    elif "spargeattn" in args.kernel_name:
         print(f"    - l1: {args.l1}")
         print(f"    - pv_l1: {args.pv_l1}")
         print(f"    - tune: {args.tune}")
@@ -245,17 +245,19 @@ def main():
     elif args.kernel_name == "online_routing":
         set_spas_sage_attn_llama(model, verbose=args.verbose, skip_thresh=args.skip_thresh, kernel_name=args.kernel_name)
         print("replace outline_routing!")
-    elif args.kernel_name == "mxfp_attn":
+    elif "mxfp_attn" in args.kernel_name:
         set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw, \
             smooth_k=args.smooth_k, dual_scale=args.dual_scale)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
-    else:
+    elif args.kernel_name == "native":
         print("use the original transformer attention!")
+    else:
+        raise ValueError(f"Unknown kernel name: {args.kernel_name}")
         
         
     model.eval()  # 设置为评估模式
     os.environ["TUNE_MODE"] = "0"  # disable tune mode
-    # world_size = torch.cuda.device_count()
+    world_size = torch.cuda.device_count()
     # mp.set_start_method('spawn', force=True)
     
     if args.test_speedup:

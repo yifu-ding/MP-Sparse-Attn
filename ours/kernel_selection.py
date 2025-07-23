@@ -27,6 +27,7 @@ import warnings
 # from einops import rearrange
 from ours.online_routing import online_routing_attn
 from ours.mxfp_attn_kernel import mxfp_attn_kernel
+from scripts.debug3 import mxfp_attn_debug
 
 # def extract_sparse_attention_state_dict(model, verbose=False):
 #     saved_state_dict = {}
@@ -147,6 +148,8 @@ class MXFPAttention(nn.Module):
             return online_routing_attn
         elif kernel_name == "mxfp_attn":
             return mxfp_attn_kernel
+        elif kernel_name == "mxfp_attn_debug":
+            return mxfp_attn_debug
         elif kernel_name == "native":
             return torch.nn.functional.scaled_dot_product_attention
         else:
@@ -313,6 +316,16 @@ class MXFPAttention(nn.Module):
                 smooth_k=self.smooth_k,
                 dual_scale=self.dual_scale,
                 # skip_thresh=self.skip_thresh,
+            )
+        elif self.kernel_name == "mxfp_attn_debug":
+            o = kernel(
+                q,
+                k,
+                v,
+                is_causal=is_causal,
+                output_dtype=output_dtype,
+                block_scale_type=self.mxfp_bw,
+                smooth_k=self.smooth_k,
             )
         elif self.kernel_name == "native":
             o = kernel(

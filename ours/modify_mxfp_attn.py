@@ -11,7 +11,7 @@ import torch.nn.functional as F
 # from functools import partial
 import types
 from ours.kernel_selection import MXFPAttention
-
+from scripts.debug3 import mxfp_attn_debug
 
 def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False, dual_scale=False):
     for layer_id, layer in enumerate(model.model.layers):
@@ -59,6 +59,9 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, sm
                 cos, sin = self.rotary_emb(value_states, position_ids)
             else:
                 cos, sin = position_embeddings
+            # Move tensors to same device as query_states
+            cos = cos.to(query_states.device)
+            sin = sin.to(query_states.device)
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
             if past_key_value is not None:
@@ -101,6 +104,8 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, sm
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
                 attn_out_dtype = self.o_proj.weight.dtype
                 attn_output = self.mxfp_attention(query_states, key_states, value_states, is_causal=True, output_dtype=attn_out_dtype)
+                # attn_output = test_add_resisual(query_states, key_states, value_states, is_causal=True, output_dtype=attn_out_dtype)
+
                 if verbose:
                     o = F.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
                     sim_dict = precision_metric(attn_output, o)
@@ -115,6 +120,7 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, sm
                         # }, 'saved_files/low_sim_attn_states.pth')
                         # print(f"save low sim attn states to saved_files/low_sim_attn_states.pth")
                         exit()
+
                 attn_output = attn_output.transpose(1, 2).contiguous()
                 attn_output = attn_output.view(bsz, q_len, -1)
                 attn_output = self.o_proj(attn_output)

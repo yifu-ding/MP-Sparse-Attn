@@ -15,5 +15,7 @@
     "falcon-7b": "tiiuae/falcon-7b",
     "mistral-7b-v0.1": "mistralai/Mistral-7B-v0.1",
     "mistral-7b-instruct-v0.2": "mistralai/Mistral-7B-Instruct-v0.2",
-    "llama-3.2-3b-instruct": "/dataset/tao/llama-3.2-3b/models--meta-llama--Llama-3.2-3B-Instruct/blobs"
+    "llama-3.2-3b-instruct": "/dataset/tao/llama-3.2-3b/models--meta-llama--Llama-3.2-3B-Instruct/blobs",
+    "llama-3.2-8b-instruct": "/dataset/tao/llama-3.1-8b/models--meta-llama--Llama-3.1-8B-Instruct/blobs", 
+    "llama3-3-70b": "/dataset/shared_models/llama3_3-70b/"
 }

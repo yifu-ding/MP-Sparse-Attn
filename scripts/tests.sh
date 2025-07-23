@@ -19,10 +19,17 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # TRITON_INTERPRET=1 python test_batched_matmul.py
 
-# export TRITON_INTERPRET=1
+export TRITON_INTERPRET=1
 # export TRITON_DEBUG=1
 # export TRITON_IR_VERBOSE=1
 # export TRITON_PTXAS_VERBOSE=1
 # python ours/mxfp_attn_kernel.py
-python tests/test_performance.py
-# python scripts/debug2.py
+if [ "$1" = "1" ]; then
+    python tests/test_performance.py
+elif [ "$1" = "2" ]; then
+    python scripts/debug2.py
+elif [ "$1" = "3" ]; then
+    python scripts/debug3.py
+elif [ "$1" = "4" ]; then
+    python tests/test_quant.py
+fi

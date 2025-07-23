@@ -56,9 +56,12 @@ def load_attention_states():
     b_fp4 = ret_dict['b_fp4']
     b_scale = ret_dict['b_scale']
 
-    # qk_quant1 = test_quant_mxfp4_input_quant_tensor(a_fp4, b_fp4, a_scale, b_scale, head_dim=128)
-    # qk_quant1_softmax = torch.nn.functional.softmax(qk_quant1, dim=-1)
-    # qkv_quant1 = torch.matmul(qk_quant1_softmax.to(torch.float16), value_states.to(torch.float16))
+    qk_quant1 = test_quant_mxfp4_input_quant_tensor(a_fp4, b_fp4, a_scale, b_scale, head_dim=128)
+    qk_quant1_softmax = torch.nn.functional.softmax(qk_quant1, dim=-1)
+    qkv_quant1 = torch.matmul(qk_quant1_softmax.to(torch.float16), value_states.to(torch.float16))
+    print("qkv_quant vs. qkv_ref")
+    precision_metric(qkv_ref, qkv_quant1)
+    import pdb; pdb.set_trace()
 
     print("matmul qk vs. mxfp qk")
     precision_metric(qk_mxfp, qk_ref)
