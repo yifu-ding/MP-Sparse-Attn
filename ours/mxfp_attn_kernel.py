@@ -14,7 +14,9 @@ import triton.profiler as proton
 
 from ours.mxfp import MXFP4Tensor, MXScaleTensor
 from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4, quant_nvfp4
+import os
 
+DEBUG_MODE = os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 @torch.compiler.disable
 def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
@@ -136,71 +138,86 @@ def is_cuda():
 def supports_block_scaling():
     return is_cuda() and torch.cuda.get_device_capability()[0] == 10
 
-@triton.jit
-def _quant_nvfp4_inner(x, BLK, C):
-    x_reshaped = tl.reshape(x, (BLK, C // 16, 16))   # x_reshaped: [BLKQ (128), headdim // 16, 16]
-    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # abs_max shape: [BLK, C//16]
-    
-    # emax_elem = 3
-    # shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem 
-    # shared_scale = tl.exp2(shared_exp) 
 
-    shared_scale = abs_max / 6
-        
-    shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 16, 1)), (BLK, C // 16, 16))
-    x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4     x = x / ss = x / (abs_max / 6) = x * 6 / abs_max
+@triton.jit
+def _quant_nvfp4_inner(x, BLK, C): 
+    x_reshaped = tl.reshape(x, (BLK, C // 16, 16))   # x_reshaped: [BLK, C//16, 16]
+    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)    # shape: [BLK, C//16]
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
-    # float4 (e2m1) range: [-6, 6]
+    # shared_scale = abs_max / 6.0
+    emax_elem = 3
+    shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem 
+    shared_scale = tl.exp2(shared_exp) 
+
+    shared_scale_broadcast = tl.broadcast_to(
+        tl.reshape(shared_scale, (BLK, C // 16, 1)), (BLK, C // 16, 16)
+    )
+    x_quant = x_reshaped / shared_scale_broadcast
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # float4 (e2m1) 的量化实现
-    # 1. 获取符号位
+
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
-    # 2. 获取指数位 (2位)
     exp = tl.where(abs_x >= 2.0, 
-                  tl.where(abs_x >= 4.0, 3, 2),
-                  tl.where(abs_x >= 1.0, 1, 0))
-    # 3. 获取尾数位 (1位)
+                   tl.where(abs_x >= 4.0, 3, 2),
+                   tl.where(abs_x >= 1.0, 1, 0))
     bias = 1.0
-    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # 首先将数值规范化到[1,2)区间
-    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
-    # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在int8里
+    norm_x = abs_x / (tl.exp2((exp - bias).to(tl.float32)))
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0),
+                                  tl.where(norm_x > 1.25, 1, 0))
     x_quant = (sign << 3) | (exp << 1) | mantissa
-    
-    # 5. pack and store x_quant
-    # Pack two e2m1 elements into a single uint8 along the specified dimension.
-    # x_uint8 = tl.reshape(x_quant, x.shape)
+
     x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
     low, high = tl.split(x_quant_reshaped)
-    x_quant = (high << 4) | low
-    '''
-    if pack_along_lastdim:
-        x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
-        low, high = tl.split(x_quant_reshaped)
-        x_uint8_packed = (high << 4) | low
-        # mask = (offs_n[:, None] < L) & (offs_k[None, :] < C//2)
-        # output_ptrs_packed = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + tl.arange(0, C//2)[None, :]
-        # tl.store(output_ptrs_packed, x_uint8_packed, mask=offs_n[:, None] < L)
-    else:
-        x_quant = tl.reshape(x_quant, x.shape)
-    '''
-        # output_ptrs_unpacked = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
-        # tl.store(output_ptrs_unpacked, x_uint8, mask=offs_n[:, None] < L)
+    packed = (high << 4) | low
+    # if DEBUG_MODE: import pdb; pdb.set_trace()
+    
+    e = tl.floor(tl.log2(shared_scale))
+    e_biased = e + 127
+    # e_biased_int = e_biased
+    e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
 
-    # 6. store scale
-    # is_invalid = torch.isnan(shared_scale) | torch.isinf(shared_scale) | (shared_scale <= 0)
-    # tl.store(scale_ptrs, 255, mask = ~is_invalid)
-    # valid_values = shared_scale[~is_invalid]
-    # e = tl.floor(tl.log2(shared_scale))
-    # e_biased = e + 127
-    # # e_biased_int = e_biased
-    # e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
+    return packed.to(tl.uint8), e_biased_clamped.to(tl.uint8)
 
-    # t = shared_scale.to(tl.float8e4nv)
-    # tl.store(scale_ptrs, t, mask=offs_n[:, None] < L)
-    # import pdb; pdb.set_trace()
-    return x_quant.to(tl.uint8), shared_scale.to(tl.uint8)
+
+
+@triton.jit
+def _quant_mxfp4_inner(x, BLK, C): 
+    x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLK, C//16, 16]
+    abs_max = tl.max(tl.abs(x_reshaped), axis=-1)    # shape: [BLK, C//16]
+    
+    # shared_scale = abs_max / 6.0
+    emax_elem = 3
+    shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem 
+    shared_scale = tl.exp2(shared_exp) 
+
+    shared_scale_broadcast = tl.broadcast_to(
+        tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32)
+    )
+    x_quant = x_reshaped / shared_scale_broadcast
+    x_quant = tl.clamp(x_quant, -6.0, 6.0)
+
+    sign = tl.where(x_quant >= 0, 0, 1)
+    abs_x = tl.abs(x_quant)
+    exp = tl.where(abs_x >= 2.0, 
+                   tl.where(abs_x >= 4.0, 3, 2),
+                   tl.where(abs_x >= 1.0, 1, 0))
+    bias = 1.0
+    norm_x = abs_x / (tl.exp2((exp - bias).to(tl.float32)))
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0),
+                                  tl.where(norm_x > 1.25, 1, 0))
+    x_quant = (sign << 3) | (exp << 1) | mantissa
+
+    x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
+    low, high = tl.split(x_quant_reshaped)
+    packed = (high << 4) | low
+    # if DEBUG_MODE: import pdb; pdb.set_trace()
+    
+    e = tl.floor(tl.log2(shared_scale))
+    e_biased = e + 127
+    # e_biased_int = e_biased
+    e_biased_clamped = tl.clamp(e_biased, 0, 254) #.to(tl.int32)
+
+    return packed.to(tl.uint8), e_biased_clamped.to(tl.uint8)
 
 @triton.jit
 def quant_mxfp8e5_to_nvfp4(q, k, scale_q, scale_k, BLK, C):
@@ -226,10 +243,66 @@ def quant_mxfp8e5_to_nvfp4(q, k, scale_q, scale_k, BLK, C):
     k_deq = k * scaling_factor                         # 恢复为反量化的 float32
 
     # step 2: quant q, k to nvfp4
-    q_quant, q_scale = _quant_nvfp4_inner(q_deq, BLK, C)
-    k_quant, k_scale = _quant_nvfp4_inner(k_deq, BLK, C)
+    # q_quant = tl.zeros([BLK, C//2], dtype=tl.uint8)  # [128, 64]
+    # k_quant = tl.zeros([BLK, C//2], dtype=tl.uint8)  # [128, 64]
+    packed_q, shared_scale_q = _quant_mxfp4_inner(q_deq, BLK, C)
+    packed_k, shared_scale_k = _quant_mxfp4_inner(k_deq, BLK, C)
 
-    return q_quant, k_quant, q_scale, k_scale
+    return packed_q, packed_k, shared_scale_q, shared_scale_k
+
+
+    '''q_reshaped = tl.reshape(q_deq, (BLK, C // 16, 16))   # x_reshaped: [BLK, C//16, 16]
+    abs_max = tl.max(tl.abs(q_reshaped), axis=-1)    # shape: [BLK, C//16]
+    shared_scale_q = abs_max / 6.0
+    shared_scale_broadcast = tl.broadcast_to(
+        tl.reshape(shared_scale_q, (BLK, C // 16, 1)), (BLK, C // 16, 16)
+    )
+    q_quant = q_reshaped / shared_scale_broadcast
+    q_quant = tl.clamp(q_quant, -6.0, 6.0)
+    sign = tl.where(q_quant >= 0, 0, 1)
+    abs_q = tl.abs(q_quant)
+    exp = tl.where(abs_q >= 2.0, 
+                   tl.where(abs_q >= 4.0, 3, 2),
+                   tl.where(abs_q >= 1.0, 1, 0))
+    bias = 1.0
+    norm_q = abs_q / (tl.exp2((exp - bias).to(tl.float32)))
+    mantissa = tl.where(exp == 0, tl.where(norm_q > 0.25, 1, 0),
+                                  tl.where(norm_q > 1.25, 1, 0))
+    q_quant = (sign << 3) | (exp << 1) | mantissa
+
+    q_quant_reshaped = tl.reshape(q_quant, (BLK, (C + 1) // 2, 2))
+    low, high = tl.split(q_quant_reshaped)
+    packed_q = (high << 4) | low
+
+    k_reshaped = tl.reshape(k_deq, (BLK, C // 16, 16))
+    abs_max = tl.max(tl.abs(k_reshaped), axis=-1)
+    shared_scale_k = abs_max / 6.0
+    shared_scale_broadcast = tl.broadcast_to(
+        tl.reshape(shared_scale_k, (BLK, C // 16, 1)), (BLK, C // 16, 16)
+    )
+    k_quant = k_reshaped / shared_scale_broadcast
+    k_quant = tl.clamp(k_quant, -6.0, 6.0)
+    sign = tl.where(k_quant >= 0, 0, 1)
+    abs_k = tl.abs(k_quant)
+    exp = tl.where(abs_k >= 2.0, 
+                   tl.where(abs_k >= 4.0, 3, 2),
+                   tl.where(abs_k >= 1.0, 1, 0))
+    bias = 1.0
+    norm_k = abs_k / (tl.exp2((exp - bias).to(tl.float32)))
+    mantissa = tl.where(exp == 0, tl.where(norm_k > 0.25, 1, 0),
+                                  tl.where(norm_k > 1.25, 1, 0))
+    k_quant = (sign << 3) | (exp << 1) | mantissa
+
+    k_quant_reshaped = tl.reshape(k_quant, (BLK, (C + 1) // 2, 2))
+    low, high = tl.split(k_quant_reshaped)
+    packed_k = (high << 4) | low
+    
+    if DEBUG_MODE: import pdb; pdb.set_trace()
+    '''
+
+    # t1 = tl.zeros([BLK, C//16], dtype=tl.float32) + 1.0 
+    # t2 = tl.zeros([BLK, C//16], dtype=tl.float32) + 1.0 
+    # return packed_q.to(tl.uint8), packed_k.to(tl.uint8), t1.to(tl.float8e4nv), t2.to(tl.float8e4nv)
     
 
 def _matmul_launch_metadata(grid, kernel, args):
@@ -383,7 +456,9 @@ def block_scaled_batched_attn_kernel(  #
     k_ptrs = k_ptr + k_base_offset + (offs_n[:, None] * stride_kn + off_k[None, :]) 
     v_ptrs = v_ori + v_base_offset + (offs_n[:, None] * stride_vn + off_v[None, :]) 
     
-    
+    scale_q_nvfp4 = tl.zeros([BLOCK_M, HEAD_DIM//32], dtype=tl.uint8)
+    scale_k_nvfp4 = tl.zeros([BLOCK_N, HEAD_DIM//32], dtype=tl.uint8)
+
     if is_causal:
         # 因果注意力第一阶段
         lo, hi = 0, start_m * BLOCK_M
@@ -406,6 +481,7 @@ def block_scaled_batched_attn_kernel(  #
             scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE)  # 128, 128/16 = 128, 8
 
             if mp_diag == 1:
+                
                 qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)  # 预分配输出
                 # if start_m == start_n:
                 # if False:
@@ -413,14 +489,28 @@ def block_scaled_batched_attn_kernel(  #
                 #     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
                 # else:
                     # tl.static_print("mp_diag == 1, nvfp4")
+                # scale_q_nvfp4 = tl.zeros([BLOCK_M, HEAD_DIM//16], dtype=tl.float32) + 1.0 
+                # scale_k_nvfp4 = tl.zeros([BLOCK_N, HEAD_DIM//16], dtype=tl.float32) + 1.0 
                 q_nvfp4, k_nvfp4, scale_q_nvfp4, scale_k_nvfp4 = quant_mxfp8e5_to_nvfp4(q, k, scale_q, scale_k, BLOCK_M, HEAD_DIM)
-                import pdb; pdb.set_trace()
-                qk += tl.dot_scaled(q_nvfp4, scale_q, "e2m1", k_nvfp4.T, scale_k, "e2m1", qk) # causal - stage1
+                # scale_q_nvfp4 += 44
+                # scale_k_nvfp4 += 44
+                if DEBUG_MODE: import pdb; pdb.set_trace()
+                # qk1 = tl.dot_scaled(q_nvfp4, scale_q, "e2m1", k_nvfp4.T, scale_k, "e2m1") # causal - stage1 
+                q_nvfp4_ = q_nvfp4 + 0.0
+                scale_q_nvfp4_ = scale_q_nvfp4 + 0
+                k_nvfp4_T = k_nvfp4.T + 0.0
+                scale_k_nvfp4_ = scale_k_nvfp4 + 0
+
+                # qk = tl.dot_scaled(q_nvfp4_, scale_q_nvfp4_, "e2m1", k_nvfp4_T, scale_k_nvfp4_, "e2m1", acc=qk)# causal - stage1
+                qk = tl.dot(q_nvfp4_,  k_nvfp4_T)# causal - stage1
+                # qk = tl.dot_scaled(q_nvfp4, scale_q_nvfp4, "e2m1", k_nvfp4.T, scale_k_nvfp4, "e2m1") # causal - stage1
+                tl.static_print("[stage1] qk.shape", qk.shape)
             else:
                 if MIXED_PREC:
                     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e2m1")
                 elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
                     # import pdb; pdb.set_trace()
+                    if DEBUG_MODE: import pdb; pdb.set_trace()
                     qk = tl.dot_scaled(q, scale_q, "e2m1", k.T, scale_k, "e2m1")  # 128,128
                 else:
                     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
@@ -491,14 +581,29 @@ def block_scaled_batched_attn_kernel(  #
                 #     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
                 # else:
                     # tl.static_print("mp_diag == 1, nvfp4")
+                # scale_q_nvfp4 = tl.zeros([BLOCK_M, HEAD_DIM//16], dtype=tl.float32) + 1.0 
+                # scale_k_nvfp4 = tl.zeros([BLOCK_N, HEAD_DIM//16], dtype=tl.float32) + 1.0 
                 q_nvfp4, k_nvfp4, scale_q_nvfp4, scale_k_nvfp4 = quant_mxfp8e5_to_nvfp4(q, k, scale_q, scale_k, BLOCK_M, HEAD_DIM)
-                import pdb; pdb.set_trace()
-                qk += tl.dot_scaled(q_nvfp4, scale_q_nvfp4, "e2m1", k_nvfp4.T, scale_k_nvfp4, "e2m1", qk) # causal - stage2
+                if DEBUG_MODE: import pdb; pdb.set_trace()
+                # scale_q_nvfp4 += 44
+                # scale_k_nvfp4 += 44
+                # qk = tl.dot_scaled(q_nvfp4, scale_q, "e2m1", k_nvfp4.T, scale_k, "e2m1") # causal - stage1
+                q_nvfp4_ = q_nvfp4 + 0
+                scale_q_nvfp4_ = scale_q_nvfp4 + 0
+                k_nvfp4_T = k_nvfp4.T + 0
+                scale_k_nvfp4_ = scale_k_nvfp4 + 0
+                
+                tl.static_print("scale_q_nvfp4_ shape = ", scale_q_nvfp4_.shape)
+                tl.static_print("scale_k_nvfp4_ shape = ", scale_k_nvfp4_.shape)
+
+                qk = tl.dot_scaled(q_nvfp4_, scale_q_nvfp4_, "e2m1", k_nvfp4_T, scale_k_nvfp4_, "e2m1", acc=qk) # causal - stage2
+                # qk = tl.dot_scaled(q_nvfp4, scale_q_nvfp4, "e2m1", k_nvfp4.T, scale_k_nvfp4, "e2m1") # causal - stage2
+                tl.static_print("[stage2] qk.shape", qk.shape)
             else:
                 if MIXED_PREC:
                     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e2m1")
                 elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
-                    # import pdb; pdb.set_trace()
+                    if DEBUG_MODE: import pdb; pdb.set_trace()
                     qk = tl.dot_scaled(q, scale_q, "e2m1", k.T, scale_k, "e2m1") 
                 else:
                     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")

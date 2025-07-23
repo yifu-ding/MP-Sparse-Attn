@@ -19,9 +19,11 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # TRITON_INTERPRET=1 python test_batched_matmul.py
 
-export TRITON_INTERPRET=1
+# export TRITON_INTERPRET=1
+export TRITON_DEBUG=1
+export TRITON_ALLOW_NON_CONSTEXPR_GLOBALS=1
 # export TRITON_DEBUG=1
-# export TRITON_IR_VERBOSE=1
+export TRITON_IR_VERBOSE=1
 # export TRITON_PTXAS_VERBOSE=1
 # python ours/mxfp_attn_kernel.py
 if [ "$1" = "1" ]; then
