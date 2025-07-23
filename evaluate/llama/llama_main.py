@@ -76,7 +76,7 @@ def main():
     # our method
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
     parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "mxfp_attn_debug", "native", 'spargeattn'])
-    parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
+    parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw", choices=["mxfp4", "mxfp8", 'nvfp4', 'mxfp8_diag'])
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
     
@@ -84,7 +84,7 @@ def main():
     # 解析参数
     args = parser.parse_args()
     assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
-    assert args.mxfp_bw in ["mxfp4", "mxfp8", 'nvfp4', 'mxfp8_diag'], "mxfp_bw must be in ['mxfp4', 'mxfp8', 'nvfp4', 'mxfp8_diag']"
+    # assert args.mxfp_bw in ["mxfp4", "mxfp8", 'nvfp4', 'mxfp8_diag'], "mxfp_bw must be in ['mxfp4', 'mxfp8', 'nvfp4', 'mxfp8_diag']"
     
     print("***** args *****")
     print(f"    - model: {args.model}")

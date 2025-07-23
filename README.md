@@ -1,156 +1,69 @@
-# Sparge Attention
-The official implementation of [SpargeAttn](https://arxiv.org/abs/2502.18137), a universal sparse attention accelerating language, image, and video models.
+## 命令行参数说明
 
-<div align="center"> <h2>SpargeAttn: Accurate Sparse Attention Accelerating Any Model Inference</h2> <a href="https://huggingface.co/papers/2502.18137"> <img src="https://img.shields.io/static/v1?label=Daily%20papers&message=HuggingFace&color=yellow" alt="Daily papers: HuggingFace"> </a> <a href="https://arxiv.org/abs/2502.18137"> <img src="https://img.shields.io/badge/arXiv-2502.18137-b31b1b.svg" alt="arXiv:2502.18137"> </a> </div> 
-
-<div align="center">
-    <a href="https://jt-zhang.github.io/" target="_blank">Jintao Zhang</a><sup></sup> | 
-    <a href="https://xiang-cd.github.io/cv" target="_blank">Chendong Xiang</a><sup></sup> | 
-    <a href="https://github.com/jason-huang03" target="_blank">Haofeng Huang</a><sup></sup> | 
-    <a href="https://haochengxi.github.io/" target="_blank">Haocheng Xi</a><sup></sup>|
-    <a href="" target="_blank">Jia Wei</a><sup></sup> | 
-    <a href="https://ml.cs.tsinghua.edu.cn/~jun/index.shtml" target="_blank">Jun Zhu</a><sup></sup> |
-    <a href="https://ml.cs.tsinghua.edu.cn/~jianfei" target="_blank">Jianfei Chen</a><sup></sup>
-</div>
-
-<!-- Jintao Zhang, Chendong Xiang, Haofeng Huang, Haocheng Xi, Jia Wei, Jun Zhu, Jianfei Chen -->
-
-<br>
-
-<p align="center">
-<img src="./assets/speed_comparison.png" width="81%" alt="speed comparison.">
-</p>
-
-<p align="center">
-<img src="./assets/overview.png" width="90%" alt="overview.">
-</p>
-
-## Project Updates
-- [2025-05-02]: 🎉SpargeAttn and [SageAttention2](https://github.com/thu-ml/SageAttention) are accepted by ICML 2025!
-- [2025-01-24]: 🎉[SageAttention](https://github.com/thu-ml/SageAttention) is accepted by ICLR 2025! 
-
-## Installation
-### Base environment
-+ `python>=3.9`   , `torch>=2.3.0`
-- `CUDA`:
-  + `>=12.8` for Blackwell
-  + `>=12.4` for fp8 support on Ada
-  + `>=12.3` for fp8 support on Hopper
-  + `>=12.0` for Ampere
+本程序命令行参数，按功能模块分组说明如下：
 
 
-### Install Package
+### 1. 模型配置
 
-```bash
-pip install ninja   # for parallel compilation
-python setup.py install   # or pip install -e .
-```
-
-
-## Avalible API
-- `spas_sage2_attn_meansim_cuda`: SpargeAttn based on [SageAttention2](https://github.com/thu-ml/SageAttention).
-
-- `spas_sage_attn_meansim_cuda`: SpargeAttn based on [SageAttention](https://github.com/thu-ml/SageAttention).
+| 参数         | 类型    | 默认值      | 说明                            |
+| ---------- | ----- | -------- | ----------------------------- |
+| `--model`  | `str` | `None`   | 模型路径或模型标识符。                   |
+| `--device` | `str` | `'cuda'` | 指定运行设备。选项：`'cuda'` 或 `'cpu'`。 |
 
 
+### 2. 稀疏注意力配置（为 codebase 算法 SpargeAttn 的参数）
 
-## Usage Examples
-## A Simple Usage Without Tuning for Any Model
-```python
-from spas_sage_attn import spas_sage2_attn_meansim_cuda
-
-attn_output = spas_sage2_attn_meansim_cuda(q, k, v, simthreshd1=0.6, cdfthreshd=0.98, is_causal=False)
-```
-
-**You can tune `simthreshd1` and `cdfthreshd` to balance between attention accuracy (higher values) and sparsity (lower values).**  
+| 参数          | 类型      | 默认值     | 说明                              |
+| ----------- | ------- | ------- | ------------------------------- |
+| `--tune`    | `store_true`  | `False` | 是否启用算子调优过程。                     |
+| `--verbose` | `store_true`  | `False` | 是否打印详细日志。                       |
+| `--l1`      | `float` | `0.06`  | 用于 query-key 稀疏选择的 L1 范数阈值。     |
+| `--pv_l1`   | `float` | `0.065` | 用于 product-value 稀疏选择的 L1 范数阈值。 |
 
 
-### CogVideoX
+### 3. 数据集配置
 
-Tuning:  
-```bash
-# sequential tuning
-python evaluate/cogvideo_example.py  --use_spas_sage_attn --model_out_path evaluate/models_dict/CogVideoX-2b_0.06_0.07.pt --tune
-
-# parallel tuning, this will use all gpu available on the machine 
-python evaluate/cogvideo_example.py  --use_spas_sage_attn --model_out_path evaluate/models_dict/CogVideoX-2b_0.06_0.07.pt --tune --parallel_tune
-```
-
-Inference:  
-```bash
-# `--compile` is optional and will slow the first time inference.
-python evaluate/cogvideo_example.py  --use_spas_sage_attn --model_out_path evaluate/models_dict/CogVideoX-2b_0.06_0.07.pt --compile
-```
-
-> **Note:**
-We provide pre-tuned hyper-parameters `CogVideoX-2b_0.06_0.07.pt` that allow running the inference script directly. However, for better performance in both speed and quality, we recommend re-tuning because the provided hyper-parameters are tuned with SpargeAttn based on SageAttention, whereas the default API is based on SageAttention2 now.
-
-> **Note:**
-`--compile` is optional and will further accelerate video generation but bring an overhead for the first video generation.
-
-### LLama
-The tuning and inference usage is similar to CogVideoX.
-
-### Supported models
-Here’s a list of the tuned models so far, go to [hugginface](https://huggingface.co/Xiang-cd/sparge-attention-model-zoo) to see all tuned ckpt. 
-Our approach is universal, and we warmly welcome contributions! Feel free to submit a pull request to support more models. 🚀
-
-| model name | example script | tuned ckpt |
-| ---- | ---- | ---- |
-| CogVideoX-2b | evaluate/cogvideo_example.py | [link](https://huggingface.co/Xiang-cd/sparge-attention-model-zoo/blob/main/cogvideox-2b/CogVideoX-2b_0.06_0.07.pt)
-| want2v-1.3B  | evaluate/wan_example.py | [link](https://huggingface.co/Xiang-cd/sparge-attention-model-zoo/tree/main/want2v-1.3B)
-| Flux  | evaluate/flux_example.py  | TBD 
+| 参数                    | 类型     | 默认值     | 说明                                             |
+| --------------------- | ------ | ------- | ---------------------------------------------- |
+| `--e`                 | `store_true` | `False` | 是否评估 LongBench-E（扩展版）。                         |
+| `--test_dataset_name` | `str`  | `'all'` | 指定单个数据集进行测试（可用于 debug）；默认设为 `'all'`，将评估 LongBench 中的所有数据集。 |
 
 
+### 4. 输出与日志配置
 
-## Performance
-![Local Image](./assets/exp_table.png)
-> **Note:** All experiments in the above Table and our paper used SpargeAttn based on SageAttention. An updated implementation based on SageAttention2, is available now. **It further offers a 30% speedup.**
-<br>
-
-
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="./assets/more_mochi_example.png" width="55%" alt="End-to-end video generation on Mochi.">
-      <br>
-      The quality of video generation on Mochi.
-    </td>
-    <td align="center">
-      <img src="./assets/niah128k.png" width="100%" alt="End-to-end performance of NIAH.">
-      <br>
-      End-to-end performance of NIAH.
-    </td>
-  </tr>
-</table>
+| 参数                 | 类型     | 默认值         | 说明                               |
+| ------------------ | ------ | ----------- | -------------------------------- |
+| `--output_path`    | `str`  | `'results'` | 结果输出目录。                          |
+| `--model_out_path` | `str`  | `''`        | 保存调优后模型的 `state_dict` 路径。（仅 SpargeAttn 使用）        |
+| `--use_wandb`      | `store_true` | `False`     | 是否启用 Weights & Biases 日志记录。      |
+| `--num_fewshots`   | `int`  | `None`      | 仅评估指定数量的 few-shot 样本（用于调试或快速验证）。 |
 
 
-<!-- <img src="./assets/visible_image.png" width="80%" alt="image generation."> -->
+### 5. 测试配置
+
+| 参数                   | 类型     | 默认值     | 说明                        |
+| -------------------- | ------ | ------- | ------------------------- |
+| `--test_speedup`     | `store_true` | `False` | 进行推理加速测试（不评估精度）      |
+| `--get_pred`         | `store_true` | `False` | 生成预测结果  |
+| `--compute_accuracy` | `store_true` | `False` | 计算预测精度  |
+
+> ✅ **仅测试速度**：使用 `--test_speedup`
+> ✅ **测试精度**：方法 1. 同时开启 `--get_pred` 和 `--compute_accuracy`；方法 2. 可先单独开启 `--get_pred` 生成预测，再单独运行 `--compute_accuracy` 评估精度
 
 
+### 6. 方法选择
 
-## Citation
-**If you use this code or find our work valuable, please cite:**
-```
-@inproceedings{zhang2025spargeattn,
-  title={Spargeattn: Accurate sparse attention accelerating any model inference},
-  author={Zhang, Jintao and Xiang, Chendong and Huang, Haofeng and Wei, Jia and Xi, Haocheng and Zhu, Jun and Chen, Jianfei},
-  booktitle={International Conference on Machine Learning (ICML)},
-  year={2025}
-}
+| 参数           | 类型    | 默认值       | 说明          |
+| --------------- | ----- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--kernel_name` | `str` | `None`    | 指定所使用的注意力 kernel 类型。可选值：<br> - `online_routing`：旧版本方法，已废弃 <br> - `mxfp_attn`：正式版 Triton kernel <br> - `mxfp_attn_debug`：用于调试的 torch+triton 实现，仅用于算法迭代和快速验证，精度不准，只能看相对精度 <br> - `native`：PyTorch 原生 SDPA 注意力 <br> - `spargeattn`：本代码库自带 baseline，可直接运行 |
+| `--mxfp_bw`     | `str` | `'mxfp8'` | 低比特 attention 的位宽设置，影响量化与计算精度。选项包括：<br> - `mxfp4`, `mxfp8`, `nvfp4`：单一位宽方案  <br> - `mxfp8_diag`：对角线使用 mxfp8，非对角线使用 nvfp4 的混合方案（验证中）    |
 
-@inproceedings{zhang2025sageattention,
-  title={SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration}, 
-  author={Zhang, Jintao and Wei, Jia and Zhang, Pengle and Zhu, Jun and Chen, Jianfei},
-  booktitle={International Conference on Learning Representations (ICLR)},
-  year={2025}
-}
 
-@inproceedings{zhang2024sageattention2,
-  title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
-  author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
-  booktitle={International Conference on Machine Learning (ICML)},
-  year={2025}
-}
-```
+### 7. 其他 trick
+
+| 参数              | 类型      | 默认值     | 说明                                    |
+| --------------- | ------- | ------- | ------------------------------------- |
+| `--skip_thresh` | `float` | `None`  | （已废弃）旧版跳过策略阈值，当前未启用。                  |
+| `--smooth_k`    | `store_true`  | `False` | 是否启用 key 矩阵平滑（smoothing）trick。        |
+| `--dual_scale`  | `store_true`  | `False` | 是否启用双重 scale 技术（our method 中的一个优化手段）。 |
+
