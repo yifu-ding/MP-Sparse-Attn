@@ -50,8 +50,8 @@ def test_performance():
 
     batch_size = 1
     num_heads = 24
-    qo_len = 256
-    kv_len = 256
+    qo_len = 500
+    kv_len = 500
     head_dim = 128
     is_causal = True
     block_scale_type = "mxfp8_diag"
@@ -131,12 +131,12 @@ def test_performance():
     # print(f"qk_sparsity_full={qk_sparsity}")
 
     # 总时间
-    # print("testing mxfp_attn_kernel...")
+    # print("testing mxfp_attn_kernel...")w
     
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
         mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, \
-            smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity
+            smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity#, save_qk=True
     )
 
     # torch.cuda.empty_cache()
@@ -253,16 +253,14 @@ def test_performance():
 
     # 打印结果
     print(f"\n{' Performance Test ':=^50}")
-    print(
-        f"**** Shape ****\nbatch_size: {batch_size}, num_heads: {num_heads}, seq_len: {kv_len}, head_dim: {head_dim}")
+    print(f"**** Shape ****\nbatch_size: {batch_size}, num_heads: {num_heads}, seq_len: {kv_len}, head_dim: {head_dim}")
     # print("**** spas_sage_attn_meansim (triton) kernel 分析 ****")
     # print(f"get_block_map_meansim: {time_block_map:.4f} ms ({time_block_map/time_total_spas*100:.4f}%)")
     # print(f"per_block_int8: {time_int8:.4f} ms ({time_int8/time_total_spas*100:.4f}%)")
     # print(f"forward: {time_forward:.4f} ms ({time_forward/time_total_spas*100:.4f}%), average time: {time_forward/iter_times:.4f} ms")
 
     # print("**** 总体算子时间对比 ****")
-    print(
-        f"mxfp_attn_kernel ({block_scale_type} triton) total: {time_total_mxfp:.4f} ms, average time: {time_total_mxfp/iter_times:.4f} ms")
+    print(f"mxfp_attn_kernel ({block_scale_type} triton) total: {time_total_mxfp:.4f} ms, average time: {time_total_mxfp/iter_times:.4f} ms")
     # print(f"mxfp_attn_kernel (triton) quant: {time_step_quant_mxfp:.4f} ms, average time: {time_step_quant_mxfp/iter_times:.4f} ms")
     # print(f"mxfp_attn_kernel (triton) init: {time_step_mxfp_init:.4f} ms, average time: {time_step_mxfp_init/iter_times:.4f} ms")
     # print(f"mxfp_attn_kernel (triton) attn: {time_step_mxfp_attn:.4f} ms, average time: {time_step_mxfp_attn/iter_times:.4f} ms")
@@ -272,11 +270,11 @@ def test_performance():
     # print(f"spas_sage_attn_meansim_cuda (cuda): {time_total_spas_cuda:.4f} ms, average time: {time_total_spas_cuda/iter_times:.4f} ms")
     # print(f"spas_sage_attn_meansim_cuda_full (cuda): {time_total_spas_cuda_full:.4f} ms, average time: {time_total_spas_cuda_full/iter_times:.4f} ms")
 
-    print(
-        f"torch.nn.functional.scaled_dot_product_attention (torch): {time_total_sdpa:.4f} ms, average time: {time_total_sdpa/iter_times:.4f} ms")
+    print(f"torch.nn.functional.scaled_dot_product_attention (torch): {time_total_sdpa:.4f} ms, average time: {time_total_sdpa/iter_times:.4f} ms")
     # print(f"flash-attention (triton): {time_total_flash:.4f} ms, average time: {time_total_flash/iter_times:.4f} ms")
 
     # 计算mse
+    # import pdb; pdb.set_trace()
     if out_mxfp is not None:
         mse_mxfp = torch.nn.functional.mse_loss(out_mxfp, out_torch)
         precision_metric(out_mxfp, out_torch, verbose=True)
