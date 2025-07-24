@@ -79,12 +79,16 @@ def main():
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
-    
+
+    parser.add_argument('--pre_quant', type=bool, default=False, help="pre quant")
+    parser.add_argument('--fuse_mp_quant', type=bool, default=False, help="fuse mp quant")
+    parser.add_argument('--fp8_tile_num', type=int, default=1, help="fp8 tile num")
 
     # 解析参数
     args = parser.parse_args()
     assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
-    
+    assert args.fp8_tile_num > 0, "fp8_tile_num must be greater than 0"
+
     print("***** args *****")
     print(f"    - model: {args.model}")
     print(f"    - device: {args.device}")
@@ -246,7 +250,8 @@ def main():
         print("replace outline_routing!")
     elif "mxfp_attn" in args.kernel_name:
         set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw, \
-            smooth_k=args.smooth_k, dual_scale=args.dual_scale)
+            smooth_k=args.smooth_k, dual_scale=args.dual_scale, pre_quant=args.pre_quant, fuse_mp_quant=args.fuse_mp_quant,
+            fp8_tile_num=args.fp8_tile_num)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
     elif args.kernel_name == "native":
         print("use the original transformer attention!")

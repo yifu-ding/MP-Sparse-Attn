@@ -81,7 +81,8 @@ executor = GPUProcessPoolExecutor()
 
 class MXFPAttention(nn.Module):
     def __init__(self, rearrange_kwargs={}, 
-                 layer_idx=-1, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False, dual_scale=False):
+                 layer_idx=-1, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False, \
+                    dual_scale=False, pre_quant=False, fuse_mp_quant=False, fp8_tile_num=1):
         super(MXFPAttention, self).__init__()
         self.layer_idx = layer_idx
         self.head_num = None
@@ -107,6 +108,9 @@ class MXFPAttention(nn.Module):
         self.mxfp_bw = mxfp_bw
         self.smooth_k = smooth_k
         self.dual_scale = dual_scale
+        self.pre_quant = pre_quant
+        self.fuse_mp_quant = fuse_mp_quant
+        self.fp8_tile_num = fp8_tile_num
     # def is_sim(self, o_gt, o_sparse):
     #     if self.sim_rule == "cosine":
     #         return precision_metric(o_sparse, o_gt, verbose=False)["Cossim"] > self.cos_sim
@@ -315,6 +319,9 @@ class MXFPAttention(nn.Module):
                 output_dtype=output_dtype,
                 smooth_k=self.smooth_k,
                 dual_scale=self.dual_scale,
+                pre_quant=self.pre_quant,
+                fuse_mp_quant=self.fuse_mp_quant,
+                fp8_tile_num=self.fp8_tile_num,
                 # skip_thresh=self.skip_thresh,
             )
         elif self.kernel_name == "mxfp_attn_debug":

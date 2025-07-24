@@ -50,8 +50,8 @@ def test_performance():
 
     batch_size = 1
     num_heads = 24
-    qo_len = 500
-    kv_len = 500
+    qo_len = 1100
+    kv_len = 1100
     head_dim = 128
     is_causal = True
     block_scale_type = "mxfp8_diag"
@@ -137,7 +137,7 @@ def test_performance():
     out_mxfp, time_total_mxfp = measure_time(
         mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, \
             smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity, \
-            fuse_mp_quant=True, oneline_quant=False, # save_qk=True
+            fuse_mp_quant=True, pre_quant=True, # save_qk=True
     )
 
     # torch.cuda.empty_cache()
@@ -275,7 +275,6 @@ def test_performance():
     # print(f"flash-attention (triton): {time_total_flash:.4f} ms, average time: {time_total_flash/iter_times:.4f} ms")
 
     # 计算mse
-    # import pdb; pdb.set_trace()
     if out_mxfp is not None:
         mse_mxfp = torch.nn.functional.mse_loss(out_mxfp, out_torch)
         precision_metric(out_mxfp, out_torch, verbose=True)

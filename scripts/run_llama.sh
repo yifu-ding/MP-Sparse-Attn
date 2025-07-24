@@ -1,5 +1,5 @@
 # export PYTHONPATH=.
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=4
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # wandb offline
 
@@ -33,11 +33,15 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 
 # mxfp attn
 # MODEL_NAME=llama3-3-70b
-MODEL_NAME=llama-3.2-3b-instruct
+# MODEL_NAME=llama-3.2-3b-instruct
+MODEL_NAME=llama-3.1-8b-instruct
 KERNEL_NAME=mxfp_attn
-BITWIDTH=mxfp8_diag_pre_quant
-DATASET_NAME="dureader"
-OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}
+BITWIDTH=mxfp8_diag
+PRE_QUANT=True
+FUSE_MP_QUANT=True
+DATASET_NAME=all
+FP8_TILE_NUM=1
+OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_PRE_${PRE_QUANT}_FUSE_${FUSE_MP_QUANT}_TILE_${FP8_TILE_NUM}
 
 rm -rf $OUTPUT_PATH
 mkdir -p $OUTPUT_PATH
@@ -51,11 +55,16 @@ python evaluate/llama/llama_main.py \
     --mxfp_bw $BITWIDTH \
     --kernel_name $KERNEL_NAME \
     --smooth_k \
+    --pre_quant $PRE_QUANT \
+    --fuse_mp_quant $FUSE_MP_QUANT \
+    --fp8_tile_num $FP8_TILE_NUM \
     --get_pred \
-    --compute_accuracy \
-    --num_fewshots 5 \
-    2>&1 | tee $OUTPUT_PATH/dual_scale.log
+     --compute_accuracy \
+    2>&1 | tee $OUTPUT_PATH/all_tasks.log
+    # --num_fewshots 5 \
     # --test_speedup \
+    # --get_pred \
+    # --compute_accuracy \
     # --dual_scale \
     # --verbose \
     # --smooth_k \
