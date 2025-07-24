@@ -35,7 +35,7 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # MODEL_NAME=llama3-3-70b
 MODEL_NAME=llama-3.2-3b-instruct
 KERNEL_NAME=mxfp_attn
-BITWIDTH=mxfp8 
+BITWIDTH=mxfp8_diag_pre_quant
 DATASET_NAME="dureader"
 OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}
 
@@ -47,13 +47,15 @@ python evaluate/llama/llama_main.py \
     --model $MODEL_NAME \
     --device cuda \
     --output_path $OUTPUT_PATH \
-    --test_speedup \
     --test_dataset_name $DATASET_NAME \
     --mxfp_bw $BITWIDTH \
     --kernel_name $KERNEL_NAME \
     --smooth_k \
+    --get_pred \
+    --compute_accuracy \
     --num_fewshots 5 \
     2>&1 | tee $OUTPUT_PATH/dual_scale.log
+    # --test_speedup \
     # --dual_scale \
     # --verbose \
     # --smooth_k \

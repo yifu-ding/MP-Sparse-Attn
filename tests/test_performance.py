@@ -136,7 +136,8 @@ def test_performance():
     out_mxfp = None
     out_mxfp, time_total_mxfp = measure_time(
         mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, \
-            smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity#, save_qk=True
+            smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity, \
+            fuse_mp_quant=True, oneline_quant=False, # save_qk=True
     )
 
     # torch.cuda.empty_cache()
