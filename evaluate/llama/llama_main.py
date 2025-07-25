@@ -76,7 +76,8 @@ def main():
     
     # our method
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
-    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", choices=["online_routing", "mxfp_attn", "mxfp_attn_debug", "native", 'spargeattn'])
+    parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", \
+        choices=["online_routing", "mxfp_attn", "mxfp_attn_debug", "native", 'spargeattn', 'flash_attn'])
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
