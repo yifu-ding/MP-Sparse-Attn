@@ -346,6 +346,7 @@ class MXFPAttention(nn.Module):
         else:
             raise ValueError(f"not support kernel name: {self.kernel_name}")
         
+        o = o.to(output_dtype)
         if return_sparsity:
             o, total_sparsity = o
             return o, total_sparsity

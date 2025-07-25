@@ -30,6 +30,7 @@ from evaluate.datasets.text.longbench.pred import build_chat, get_pred, get_pred
 from datasets import load_dataset
 from evaluate.datasets.text.longbench.eval import scorer_e, scorer
 # import torch.multiprocessing as mp
+from tests.modify_flash_attn_triton import set_flash_attn_triton_llama
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -253,6 +254,9 @@ def main():
             smooth_k=args.smooth_k, dual_scale=args.dual_scale, pre_quant=args.pre_quant, fuse_mp_quant=args.fuse_mp_quant,
             fp8_tile_num=args.fp8_tile_num)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
+    elif "flash_attn" in args.kernel_name:
+        set_flash_attn_triton_llama(model, smooth_k=args.smooth_k)
+        print("replace flash_attn!")
     elif args.kernel_name == "native":
         print("use the original transformer attention!")
     else:
