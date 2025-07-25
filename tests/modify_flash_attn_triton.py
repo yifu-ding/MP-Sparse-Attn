@@ -23,13 +23,10 @@ class FlashAttentionTriton(nn.Module):
         is_causal=False,
         scale=None,
         tensor_layout="HND",
-        tune_mode=False,
-        smooth_k=True,
-        return_sparsity=False,
         output_dtype=torch.float16,
     ):
         assert len(q.shape) == 4, "q should be 4-d tensor with B, H, L, D"
-         
+        if self.smooth_k: k = k - k.mean(dim=-2, keepdim=True)
         q = q.permute(0, 2, 1, 3).contiguous().to(torch.float16)
         k = k.permute(0, 2, 1, 3).contiguous().to(torch.float16)
         v = v.permute(0, 2, 1, 3).contiguous().to(torch.float16)
@@ -38,8 +35,8 @@ class FlashAttentionTriton(nn.Module):
             k,
             v,
             None,
-            True,
-            None,
+            is_causal,
+            scale,
         )
         o = o.permute(0, 2, 1, 3).contiguous()
         return o.to(output_dtype)
