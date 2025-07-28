@@ -22,7 +22,7 @@ DEBUG_MODE = os.environ.get('TRITON_INTERPRET', '0') == '1'
 @torch.compiler.disable
 def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
                     output_dtype=torch.bfloat16, return_sparsity=False, block_scale_type="mxfp4", return_quant_tensor=False, dual_scale=False,\
-                    save_qk=False, quant_granularity="tokenwise", fuse_mp_quant=True, pre_quant=False, fp8_tile_num=1):
+                    save_qk=False, quant_granularity="tokenwise", fuse_mp_quant=False, pre_quant=False, fp8_tile_num=1):
 
     torch.cuda.set_device(v.device)
     if 'diag' in block_scale_type and (not pre_quant):
@@ -49,7 +49,7 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
     ret_dict, kernel_name = None, None
     q_scale_fp4, k_scale_fp4, q_fp4, k_fp4 = None, None, None, None
     
-    if 'qkv_quant' in block_scale_type and"diag" in block_scale_type and fuse_mp_quant:
+    if 'qkv_quant' in block_scale_type and "diag" in block_scale_type and fuse_mp_quant:
         kernel_name = 'pre_quant'
         pack_along_lastdim = True
         q_fp8, q_scale, k_fp8, k_scale, q_fp4, q_scale_fp4, k_fp4, k_scale_fp4, q_scale_2, k_scale_2, \
@@ -75,9 +75,9 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
             pack_along_lastdim=pack_along_lastdim, dual_scale=dual_scale, quant_granularity=quant_granularity)
         if return_quant_tensor:
             ret_dict = {
-                "q_fp4": q_fp4,
+                "q_fp": q_fp4,
                 "q_scale": q_scale,
-                "k_fp4": k_fp4,
+                "k_fp": k_fp4,
                 "k_scale": k_scale,
                 "q_scale_2": q_scale_2,
                 "k_scale_2": k_scale_2
@@ -90,50 +90,80 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
         q_quant = q_fp4
         k_quant = k_fp4
 
-    elif "diag" in block_scale_type and fuse_mp_quant:  # ours - final 
-        kernel_name = 'pre_quant'
-        pack_along_lastdim = True
-        q_fp8, q_scale, k_fp8, k_scale, q_fp4, q_scale_fp4, k_fp4, k_scale_fp4, q_scale_2, k_scale_2 = \
-            quant_mxfp8e5_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, pack_along_lastdim=pack_along_lastdim)
-        q_quant = q_fp8
-        k_quant = k_fp8
-
-        if not pack_along_lastdim:
-            q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
-            q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
-            k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
-            k_fp4 = k_fp4.to_packed_tensor(dim=len(k_fp4.data.shape) - 1)
-
-        q_fp4, k_fp4 = q_fp4.contiguous(), k_fp4.contiguous()
-
-    elif "mxfp8" in block_scale_type and (not fuse_mp_quant):
-        kernel_name = 'pre_quant'
-
-        q_fp8, q_scale, k_fp8, k_scale, q_scale_2, k_scale_2 = quant_mxfp8e5(q, k, BLKQ=BLKQ, BLKK=BLKK)
-        q_quant = q_fp8
-        k_quant = k_fp8
-
-        if 'diag' in block_scale_type:
-            pack_along_lastdim = True
-            # q_scale_fp4, k_scale_fp4 = get_nvfp4_scale(q, k, BLKQ=BLKQ, BLKK=BLKK)
-            q_fp4, q_scale_fp4, k_fp4, k_scale_fp4, q_scale_2, k_scale_2 = quant_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, \
-                pack_along_lastdim=pack_along_lastdim, dual_scale=dual_scale, quant_granularity=quant_granularity)
-    
-    elif "mxfp8" in block_scale_type:
+    elif "mxfp8" in block_scale_type and "diag" not in block_scale_type:
         
-        q_fp8, q_scale, k_fp8, k_scale, q_scale_2, k_scale_2 = quant_mxfp8e5(q, k, BLKQ=BLKQ, BLKK=BLKK)
+        q_fp8, q_scale, k_fp8, k_scale, q_scale_2, k_scale_2 = quant_mxfp8e5(q, k, BLKQ=BLKQ, BLKK=BLKK, \
+            dual_scale=dual_scale, quant_granularity=quant_granularity)
         q_quant = q_fp8
         k_quant = k_fp8
 
-        if 'diag' in block_scale_type:
-            kernel_name = 'online_quant'
+        if return_quant_tensor:
+            ret_dict = {
+                "q_fp": q_fp8,
+                "q_scale": q_scale,
+                "k_fp": k_fp8,
+                "k_scale": k_scale,
+                "q_scale_2": q_scale_2,
+                "k_scale_2": k_scale_2
+            }
+
+    elif 'diag' in block_scale_type:  # mp - ours
+
+        if fuse_mp_quant: # fuse double quantization
+            kernel_name = 'pre_quant'
+
             pack_along_lastdim = True
-            q_scale_fp4, k_scale_fp4 = get_nvfp4_scale(q, k, BLKQ=BLKQ, BLKK=BLKK)
+            q_fp8, q_scale, k_fp8, k_scale, q_fp4, q_scale_fp4, k_fp4, k_scale_fp4, q_scale_2, k_scale_2 = \
+                quant_mxfp8e5_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, pack_along_lastdim=pack_along_lastdim, \
+                    dual_scale=dual_scale, quant_granularity=quant_granularity)
+            q_quant = q_fp8
+            k_quant = k_fp8
+
+            if not pack_along_lastdim:
+                q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
+                q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
+                k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
+                k_fp4 = k_fp4.to_packed_tensor(dim=len(k_fp4.data.shape) - 1)
+
+            q_fp4, k_fp4 = q_fp4.contiguous(), k_fp4.contiguous()
+
+        else:
+            q_fp8, q_scale, k_fp8, k_scale, q_scale_2, k_scale_2 = quant_mxfp8e5(q, k, BLKQ=BLKQ, BLKK=BLKK)
+            q_quant = q_fp8
+            k_quant = k_fp8
+            
+            if pre_quant:
+                pack_along_lastdim = True
+                kernel_name = 'pre_quant'
+                q_fp4, q_scale_fp4, k_fp4, k_scale_fp4, q_scale_2, k_scale_2 = quant_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, \
+                    pack_along_lastdim=pack_along_lastdim, dual_scale=dual_scale, quant_granularity=quant_granularity)
+                if not pack_along_lastdim:
+                    q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
+                    q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
+                    k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
+                    k_fp4 = k_fp4.to_packed_tensor(dim=len(k_fp4.data.shape) - 1)
+
+                q_fp4, k_fp4 = q_fp4.contiguous(), k_fp4.contiguous()
+
+            else:
+                kernel_name = 'online_quant'
+                q_scale_fp4, k_scale_fp4 = get_nvfp4_scale(q, k, BLKQ=BLKQ, BLKK=BLKK)
 
     elif "nvfp4" in block_scale_type:
-        pack_along_lastdim = True
+        pack_along_lastdim = False
         q_fp4, q_scale, k_fp4, k_scale, q_scale_2, k_scale_2 = quant_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, \
             pack_along_lastdim=pack_along_lastdim, dual_scale=dual_scale, quant_granularity=quant_granularity)
+
+        if return_quant_tensor:
+            ret_dict = {
+                "q_fp": q_fp4,
+                "q_scale": q_scale,
+                "k_fp": k_fp4,
+                "k_scale": k_scale,
+                "q_scale_2": q_scale_2,
+                "k_scale_2": k_scale_2
+            }
+
         if not pack_along_lastdim:
             q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
             q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
@@ -146,7 +176,6 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
     k_quant = k_quant.contiguous()
     
     VEC_SIZE = 16 if block_scale_type == "nvfp4" else 32
-
     
     # 扩展 q_scale 和 k_scale 的第2维度为128的倍数
     M_padded = ((M + 127) // 128) * 128 
@@ -946,6 +975,7 @@ def block_scaled_batched_attn_kernel(  #
     
     if is_causal:
         # 因果注意力第一阶段
+        saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
         lo, hi = 0, start_m * BLOCK_M
 
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
@@ -982,40 +1012,41 @@ def block_scaled_batched_attn_kernel(  #
             
             if dual_scale:  
                 qk = qk * (scale_q_2 * scale_k_2)
-                # saved_qk = qk
+
+            saved_qk = qk
             
             # 因果注意力第一阶段计算
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
-            mask_sum = tl.sum(tl.sum(mask, axis=0))
-            if True:
+            # mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
+            # mask_sum = tl.sum(tl.sum(mask, axis=0))
+            # if True:
             # if mask_sum > 0:   # 好像是对的，但收益不多
-                local_m = tl.max(qk, 1)  # [128]
-                new_m = tl.maximum(old_m, local_m)
-                qk = qk - new_m[:, None]
+            local_m = tl.max(qk, 1)  # [128]
+            new_m = tl.maximum(old_m, local_m)
+            qk = qk - new_m[:, None]
 
-                p = tl.math.exp2(qk)
-                l_ij = tl.sum(p, 1)
-                alpha = tl.math.exp2(old_m - new_m)
-                l_i = l_i * alpha + l_ij
-                acc = acc * alpha[:, None]
-                
-                v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
-                p = p.to(tl.float16)
-                acc += tl.dot(p, v, out_dtype=tl.float16)
-                old_m = new_m
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            alpha = tl.math.exp2(old_m - new_m)
+            l_i = l_i * alpha + l_ij
+            acc = acc * alpha[:, None]
+            
+            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
+            p = p.to(tl.float16)
+            acc += tl.dot(p, v, out_dtype=tl.float16)
+            old_m = new_m
 
-                k_ptrs += BLOCK_N * stride_kn
-                v_ptrs += BLOCK_N * stride_vn
-                if USE_2D_SCALE_LOAD:
-                    k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
-                        
-                if dual_scale: 
-                    if quant_granularity == 0:
-                        k_scale_2_ptr += 1
-                    elif quant_granularity == 1:
-                        k_scale_2_ptr += HEAD_DIM  # seems right?
-                    elif quant_granularity == 2:
-                        k_scale_2_ptr += BLOCK_N
+            k_ptrs += BLOCK_N * stride_kn
+            v_ptrs += BLOCK_N * stride_vn
+            if USE_2D_SCALE_LOAD:
+                k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
+                    
+            if dual_scale: 
+                if quant_granularity == 0:
+                    k_scale_2_ptr += 1
+                elif quant_granularity == 1:
+                    k_scale_2_ptr += HEAD_DIM  # seems right?
+                elif quant_granularity == 2:
+                    k_scale_2_ptr += BLOCK_N
 
         # 因果注意力第二阶段
         saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
@@ -1057,13 +1088,15 @@ def block_scaled_batched_attn_kernel(  #
             if dual_scale: 
                 qk = qk * (scale_q_2 * scale_k_2)
 
+            saved_qk = qk
+
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
             # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
-
             # 因果注意力第二阶段计算
-            
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk + tl.where(mask, 0, -1.0e6)
+            saved_qk = qk
+
             local_m = tl.max(qk, 1)
             new_m = tl.maximum(old_m, local_m)
             qk -= new_m[:, None]
@@ -1092,7 +1125,7 @@ def block_scaled_batched_attn_kernel(  #
                 elif quant_granularity == 2:
                     k_scale_2_ptr += BLOCK_N
     else:
-        # saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+        saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
 
         lo, hi = 0, kv_len
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
@@ -1118,10 +1151,11 @@ def block_scaled_batched_attn_kernel(  #
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
 
             if dual_scale:  
-                qk = qk * ( scale_q_2 * scale_k_2)
+                qk = qk * (scale_q_2 * scale_k_2)
+
+            saved_qk = qk
 
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
-
             # 非因果注意力计算
             qk = qk.to(tl.float32)
             local_m = tl.max(qk, 1) 
@@ -1157,7 +1191,11 @@ def block_scaled_batched_attn_kernel(  #
 
     acc = acc / l_i[:, None]
     o_ptrs = o_ptr + off_z * stride_ob + off_h * stride_oh + offs_m[:, None] * stride_om + off_v[None, :]  
-    tl.store(o_ptrs, acc.to(output_dtype), mask=(offs_m[:, None] < qo_len))
+
+    if save_qk:
+        tl.store(o_ptrs, saved_qk.to(output_dtype), mask=(offs_m[:, None] < qo_len))
+    else:
+        tl.store(o_ptrs, acc.to(output_dtype), mask=(offs_m[:, None] < qo_len))
 
 
 

@@ -10,7 +10,7 @@ from tests.flash_attn_triton_residual import _flash_attn_forward_residual
 from einops import rearrange, repeat
 import math
 
-def mxfp_attn_debug(q, k, v, is_causal=False, output_dtype=torch.float32, block_scale_type="mxfp8+nvfp4", smooth_k=False):
+def mxfp_attn_simulate(q, k, v, is_causal=False, output_dtype=torch.float32, block_scale_type="mxfp8+nvfp4", smooth_k=False):
     '''q = q.to(torch.float16)
     k = k.to(torch.float16)
     v = v.to(torch.float16)

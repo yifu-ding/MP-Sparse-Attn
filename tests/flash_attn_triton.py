@@ -243,8 +243,8 @@ def _fwd_kernel(
                     mask=((start_n + offs_n)[:, None] < seqlen_k) & (offs_d[None, :] < headdim),
                     other=0.0,
                 )
-        # p = p.to(v.dtype)
-        v = v.to(p.dtype)
+        p = p.to(v.dtype)
+        # v = v.to(p.dtype)
         acc_o += tl.dot(p, v)
 
         # -- update statistics
