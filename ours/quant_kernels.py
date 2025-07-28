@@ -113,6 +113,9 @@ def quant_fpxint8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
 
     return q_int8, q_scale, k_int8, k_scale
 
+
+
+
 @triton.jit
 def quant_mxfp8e5_kernel(Input, Output, Scale, L,
                     stride_iz, stride_ih, stride_in,
@@ -160,6 +163,8 @@ def quant_mxfp8e5_kernel(Input, Output, Scale, L,
     # is_invalid = torch.isnan(shared_scale) | torch.isinf(shared_scale) | (shared_scale <= 0)
     # tl.store(scale_ptrs, 255, mask = ~is_invalid)
     # valid_values = shared_scale[~is_invalid]
+    # 存储每32个元素的scale
+
     e = tl.floor(tl.log2(shared_scale))
     e_biased = e + 127
     e_biased_clamped = tl.clamp(e_biased, 0, 254)
@@ -222,18 +227,18 @@ def quant_mxfp8e5(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND"):
 
 
 
-
 @triton.jit
-def quant_mxfp8e5_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4, L,
+def quant_mxfp8e5_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4, Scale_q, L,
                     stride_iz, stride_ih, stride_in,
                     stride_oz, stride_oh, stride_on,
                     stride_oz_2, stride_oh_2, stride_on_2,
                     stride_sz, stride_sh, stride_sn,  # b, h_qo, qo_len, head_dim // 32
                     stride_sz_2, stride_sh_2, stride_sn_2,  # b, h_qo, qo_len, head_dim // 16
+                    stride_sz_3, stride_sh_3, stride_sn_3,  # b, h_qo, qo_len, 1
                     sm_scale, 
                     C: tl.constexpr, BLK: tl.constexpr,   # C: head_dim, BLK: BLKQ 128 or BLKK 64
-                    dual_scale_type = 0, dual_scale = False,
-                    pack_along_lastdim = False, 
+                    dual_scale_type: tl.constexpr = 0, dual_scale: tl.constexpr = False,
+                    pack_along_lastdim: tl.constexpr = False, 
                     ):
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
@@ -328,30 +333,9 @@ def quant_mxfp8e5_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_f
     tl.store(scale_ptrs, e_biased_clamped.to(tl.uint8), mask=offs_n[:, None] < L)
 
    
-    # if dual_scale:
-    #     if dual_scale_type == 0:
-    #         scale_ptrs_2 = Scale_2 + off_b * stride_sz_2 + off_h * stride_sh_2 + off_blk  # per block scale
-    #         scale = tl.max(tl.abs(x)) / 6  # mxfp4 range: [-6, 6]
-    #         scale += 0.0000001
-    #         x = x / scale
-    #         tl.store(scale_ptrs_2, scale)
-    #     elif dual_scale_type == 1:
-    #         scale_ptrs_2 = Scale_2 + off_b * stride_sz_2 + off_h * stride_sh_2 + off_blk * stride_sn_2 + offs_k[None, :]  # per channel scale
-    #         scale = tl.max(tl.abs(x), axis=0, keep_dims=True) / 6   # mxfp4 range: [-6, 6]
-    #         scale += 0.0000001
-    #         x = x / scale
-    #         tl.store(scale_ptrs_2, scale)
-    #     elif dual_scale_type == 2:
-    #         scale_ptrs_2 = Scale_2 + off_b * stride_sz_2 + off_h * stride_sh_2 + offs_n[:, None] # per token scale
-    #         scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / 6 # mxfp4 range: [-6, 6]
-    #         scale += 0.0000001
-    #         x = x / scale
-    #         tl.store(scale_ptrs_2, scale, mask=offs_n[:, None] < L)
-    
-    
 
 def quant_mxfp8e5_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False, \
-    dual_scale_type=0, dual_scale=False, v_quant=False, v=None):
+    dual_scale=False, v_quant=False, v=None, quant_granularity="blockwise"):
     q_fp8 = torch.empty(q.shape, dtype=torch.float8_e5m2, device=q.device)
     k_fp8 = torch.empty(k.shape, dtype=torch.float8_e5m2, device=k.device)
 
@@ -364,26 +348,9 @@ def quant_mxfp8e5_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="
         stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(1), k.stride(2)
         stride_bz_ko, stride_h_ko, stride_seq_ko = k_fp8.stride(0), k_fp8.stride(1), k_fp8.stride(2)
 
-        if pack_along_lastdim:
-            assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
-            assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
-            q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
-            k_fp4 = torch.empty((b, h_kv, kv_len, (head_dim + 1) // 2), dtype=torch.uint8, device=k.device)
-        else:
-            q_fp4 = torch.empty(q.shape, dtype=torch.uint8, device=q.device)
-            k_fp4 = torch.empty(k.shape, dtype=torch.uint8, device=k.device)
-
-
-    elif tensor_layout == "NHD":
-        b, qo_len, h_qo, head_dim = q.shape
-        _, kv_len, h_kv, _ = k.shape
-
-        stride_bz_q, stride_h_q, stride_seq_q = q.stride(0), q.stride(2), q.stride(1)
-        stride_bz_qo, stride_h_qo, stride_seq_qo = q_fp8.stride(0), q_fp8.stride(2), q_fp8.stride(1)
-        stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(2), k.stride(1)
-        stride_bz_ko, stride_h_ko, stride_seq_ko = k_fp8.stride(0), k_fp8.stride(2), k_fp8.stride(1)
-    else:
-        raise ValueError(f"Unknown tensor layout: {tensor_layout}")
+        q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
+        k_fp4 = torch.empty((b, h_kv, kv_len, (head_dim + 1) // 2), dtype=torch.uint8, device=k.device)
+    
 
     q_scale_fp8 = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.uint8)
     k_scale_fp8 = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.uint8)
@@ -394,44 +361,58 @@ def quant_mxfp8e5_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="
     q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
     k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
 
-    if v_quant:
-        v_fp8 = torch.empty(v.shape, dtype=torch.float8_e5m2, device=v.device)
-        if pack_along_lastdim:
-            v_fp4 = torch.empty((b, h_kv, kv_len, (head_dim + 1) // 2), dtype=torch.uint8, device=k.device)
-        else:
-            v_fp4 = torch.empty(v.shape, dtype=torch.uint8, device=v.device)
-        v_scale_fp8 = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.uint8)
-        v_scale_fp4 = torch.empty((b, h_kv, kv_len, head_dim // 16), device=q.device, dtype=torch.float8_e4m3fn)
-        v_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
-
     if sm_scale is None:
         sm_scale = head_dim**-0.5
 
+    
+    # dual scale: channelwise, blockwise, tokenwise
+    dual_scale_type_q = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
+    dual_scale_type_k = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
+    if quant_granularity == "blockwise":
+        dual_scale_type_q = 0
+        dual_scale_type_k = 0
+        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
+    elif quant_granularity == "channelwise": # channelwise in blockwise
+        dual_scale_type_q = 0
+        dual_scale_type_k = 1
+        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
+    elif quant_granularity == "tokenwise":
+        dual_scale_type_q = 2
+        dual_scale_type_k = 2
+        q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
+        k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
+    else:
+        raise ValueError(f"Unknown quant granularity: {quant_granularity}")
+
     grid = ((qo_len + BLKQ - 1) // BLKQ, h_qo, b)
     quant_mxfp8e5_nvfp4_kernel[grid](
-        q, q_fp8, q_fp4, q_scale_fp8, q_scale_fp4, qo_len,
+        q, q_fp8, q_fp4, q_scale_fp8, q_scale_fp4, q_scale_2, qo_len,
         stride_bz_q, stride_h_q, stride_seq_q,
         q_fp8.stride(0), q_fp8.stride(1), q_fp8.stride(2), 
         q_fp4.stride(0), q_fp4.stride(1), q_fp4.stride(2), 
         q_scale_fp8.stride(0), q_scale_fp8.stride(1), q_scale_fp8.stride(2),
         q_scale_fp4.stride(0), q_scale_fp4.stride(1), q_scale_fp4.stride(2),
+        q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        dual_scale_type=dual_scale_type, dual_scale=dual_scale,
+        dual_scale_type=dual_scale_type_q, dual_scale=dual_scale,
         pack_along_lastdim=pack_along_lastdim
     )
 
     grid = ((kv_len + BLKK - 1) // BLKK, h_kv, b)
     quant_mxfp8e5_nvfp4_kernel[grid](
-        k, k_fp8, k_fp4, k_scale_fp8, k_scale_fp4, kv_len,
+        k, k_fp8, k_fp4, k_scale_fp8, k_scale_fp4, k_scale_2, kv_len,
         stride_bz_k, stride_h_k, stride_seq_k,
         k_fp8.stride(0), k_fp8.stride(1), k_fp8.stride(2), 
         k_fp4.stride(0), k_fp4.stride(1), k_fp4.stride(2),
         k_scale_fp8.stride(0), k_scale_fp8.stride(1), k_scale_fp8.stride(2),
         k_scale_fp4.stride(0), k_scale_fp4.stride(1), k_scale_fp4.stride(2),
+        k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,
-        dual_scale_type=dual_scale_type, dual_scale=dual_scale,
+        dual_scale_type=dual_scale_type_k, dual_scale=dual_scale,
         pack_along_lastdim=pack_along_lastdim
     )
 
@@ -446,7 +427,7 @@ def quant_mxfp8e5_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="
             v_scale_fp4.stride(0), v_scale_fp4.stride(1), v_scale_fp4.stride(2),
             sm_scale=1.0,
             C=head_dim, BLK=BLKK,
-            dual_scale_type=dual_scale_type, dual_scale=dual_scale,
+            dual_scale_type=dual_scale_type_k, dual_scale=dual_scale,
             pack_along_lastdim=pack_along_lastdim
         )
     if v_quant:

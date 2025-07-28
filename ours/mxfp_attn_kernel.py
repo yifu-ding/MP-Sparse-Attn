@@ -22,7 +22,7 @@ DEBUG_MODE = os.environ.get('TRITON_INTERPRET', '0') == '1'
 @torch.compiler.disable
 def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
                     output_dtype=torch.bfloat16, return_sparsity=False, block_scale_type="mxfp4", return_quant_tensor=False, dual_scale=False,\
-                    save_qk=False, quant_granularity="tokenwise", fuse_mp_quant=True, pre_quant=False, fp8_tile_num=1):
+                    save_qk=False, quant_granularity="tokenwise", fuse_mp_quant=True, pre_quant=False, fp8_tile_num=1, sink_size=1):
 
     torch.cuda.set_device(v.device)
     if 'diag' in block_scale_type and (not pre_quant):
@@ -227,7 +227,7 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
                 q_scale_2, k_scale_2, \
                 v, is_causal, output_dtype, B, H, M, N, K, configs, save_qk=save_qk, \
                 dual_scale=dual_scale, quant_granularity=quant_granularity, \
-                kernel_name=kernel_name, fp8_tile_num=fp8_tile_num
+                kernel_name=kernel_name, fp8_tile_num=fp8_tile_num, sink_size=sink_size
         )   
     if return_quant_tensor:
         return output, ret_dict
@@ -1587,6 +1587,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
         dual_scale: tl.constexpr = False,
         quant_granularity: tl.constexpr = 0,
         fp8_tile_num: tl.constexpr = 1, 
+        sink_size: tl.constexpr = 1,
 ):  # False, qo_len = 256, kv_len = 512
 
     start_m = tl.program_id(0)  # M*N维度的块索引
@@ -1708,9 +1709,67 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
     k_ptrs_nvfp4 = k_nvfp4_ptr + k_base_offset_nvfp4 + offs_n[:, None] * (stride_kn//2) + off_k_nvfp4[None, :] # 128*64
 
     if is_causal:
+        # attn sink 
+
+        lo, hi = 0, sink_size * BLOCK_M
+        for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
+            # 计算当前块的有效范围
+            curr_n_range = start_n + offs_n
+            n_mask = curr_n_range < kv_len
+
+            # k = tl.load(k_ptrs, mask = offs_n[None, :] < (kv_len - start_n))
+            # k = tl.load(k_ptrs, mask=n_mask[None, :], other=0.0) 
+            k = tl.load(k_ptrs, mask=n_mask[:, None], other=0.0)
+            scale_k = tl.load(k_scale_ptr)  # [2, 1024]
+            if dual_scale: scale_k_2 = tl.load(k_scale_2_ptr)
+
+            # if USE_2D_SCALE_LOAD:  
+            scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
+            k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
+            scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE) 
+
+            qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
+            if dual_scale: qk = qk * (scale_q_2 * scale_k_2)
+
+            qk = tl.where(n_mask[None, :], qk, -float("inf"))
+            # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
+
+            local_m = tl.max(qk, 1)
+            new_m = tl.maximum(old_m, local_m)
+            qk -= new_m[:, None]
+
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            alpha = tl.math.exp2(old_m - new_m)
+            l_i = l_i * alpha + l_ij
+            acc = acc * alpha[:, None]
+
+            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
+            p = p.to(tl.float16)
+            # acc += tl.dot(p, v, out_dtype=tl.float16)
+            acc += tl.dot_scaled(p, None, "fp16", v, None, "fp16")
+            old_m = new_m
+
+            k_ptrs += BLOCK_N * stride_kn
+            v_ptrs += BLOCK_N * stride_vn
+            # if USE_2D_SCALE_LOAD:
+            #     k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
+            if dual_scale:  
+                if quant_granularity == 0:
+                    k_scale_2_ptr += 1
+                elif quant_granularity == 1:
+                    k_scale_2_ptr += HEAD_DIM  # seems right?
+                elif quant_granularity == 2:
+                    k_scale_2_ptr += BLOCK_N
+
+
         # 因果注意力第一阶段
-        lo, hi = 0, (start_m+1-fp8_tile_num) * BLOCK_M
+        k_ptrs_nvfp4 += BLOCK_N * stride_kn * sink_size # * BLOCK_M//BLOCK_N
+        k_scale_nvfp4_ptr += (HEAD_DIM // 16 // 4) * stride_skk * sink_size
+
+        lo, hi = sink_size * BLOCK_M, (start_m+1-fp8_tile_num) * BLOCK_M
         hi = 0 if hi < 0 else hi
+        lo = hi if lo > hi else lo
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
             # 计算当前块的有效范围
@@ -1761,8 +1820,8 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
                     k_scale_2_ptr += BLOCK_N
 
         # 因果注意力第二阶段
-        k_ptrs += BLOCK_N * stride_kn * (hi//BLOCK_M)
-        k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk * (hi//BLOCK_M)
+        k_ptrs += BLOCK_N * stride_kn * (hi//BLOCK_N-sink_size)
+        k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk * (hi//BLOCK_N-sink_size)
 
         # saved_qk = tl.zeros([BLOCK_M, 8], dtype=tl.float32)
         lo, hi = (start_m+1-fp8_tile_num) * BLOCK_M, (start_m + 1) * BLOCK_M
@@ -2457,7 +2516,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
                             a_scale_2, b_scale_2, \
                             v_ori, is_causal, dtype_dst, B, H, M, N, K, configs, save_qk=False, \
                             dual_scale=False, quant_granularity="blockwise", kernel_name=None, \
-                            fp8_tile_num=1):
+                            fp8_tile_num=1, sink_size=1):
     """
     支持多维批量矩阵乘法的函数
 
@@ -2564,7 +2623,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
             configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], K,
             configs["num_stages"], USE_2D_SCALE_LOAD=True, qo_len=qo_len, kv_len=kv_len, 
             save_qk=save_qk, dual_scale=dual_scale, quant_granularity=quant_granularity,
-            fp8_tile_num=fp8_tile_num)
+            fp8_tile_num=fp8_tile_num, sink_size=sink_size)
     else:
         block_scaled_batched_attn_kernel[grid](
             a_desc, a_scale, a_scale_2,

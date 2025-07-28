@@ -9,6 +9,33 @@ Reference: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-
 import torch
 
 
+class MXFP8Tensor:
+
+    def __init__(self, data=None, size=None, device=None, dtype=torch.float32):
+        """
+        Tensor class for working with four bit E2M1 floating point data as defined by the
+        opencompute microscaling specification.
+
+
+        Parameters:
+        - data: A torch tensor of float32 numbers to convert to fp4e2m1 microscaling format.
+        - size: The size of the tensor to create.
+        - device: The device on which to create the tensor.
+        """
+        self.device = device
+        if data is not None:
+            assert isinstance(data, torch.Tensor), "Parameter data must be a torch tensor"
+            self.device = data.device
+            # assert dtype in [torch.float32, torch.uint8], "Currently only float32 and uint8 are supported for fp4e2m1"
+            self.data = self._from_float(data) 
+        elif size is not None:
+            self.size = size if isinstance(size, tuple) else (size, )
+        else:
+            raise ValueError("Either parameter data or size must be provided")
+
+    def _from_float(self, values):
+        return values.to(torch.float8_e5m2)
+
 class MXFP4Tensor:
 
     def __init__(self, data=None, size=None, device=None, dtype=torch.float32):
