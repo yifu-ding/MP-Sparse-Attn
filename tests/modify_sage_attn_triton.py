@@ -7,6 +7,7 @@ import types
 import torch.nn as nn
 from tests.flash_attn_triton import flash_attn_func
 from flash_attn.flash_attn_triton import _flash_attn_forward
+from sageattention import sageattn, sageattn_qk_int8_pv_fp16_triton
 
 class FlashAttentionTriton(nn.Module):
     def __init__(self, layer_idx=-1, smooth_k=False):
@@ -138,7 +139,7 @@ def set_flash_attn_triton_llama(model, smooth_k=False):
 
         layer.self_attn.forward = types.MethodType(new_forward, layer.self_attn)
         
-def LlamaFlashAttnForward(
+def LlamaSageAttnForward(
     self,
     hidden_states: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
@@ -232,7 +233,15 @@ def LlamaFlashAttnForward(
         key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
         value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
         
-        '''
+        # attn_output = sageattn(
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     # attn_mask=causal_mask,
+        #     # dropout_p=self.attention_dropout if self.training else 0.0,
+        #     is_causal=True,
+        # )
+
         attn_output = sageattn_qk_int8_pv_fp16_triton(
             query_states,
             key_states,
@@ -241,37 +250,15 @@ def LlamaFlashAttnForward(
             # dropout_p=self.attention_dropout if self.training else 0.0,
             is_causal=True,
         )
-        '''
-        
-        
-        # st_atten = time.perf_counter()
-
-        query_states = query_states.permute(0, 2, 1, 3).contiguous()
-        key_states = key_states.permute(0, 2, 1, 3).contiguous()
-        value_states = value_states.permute(0, 2, 1, 3).contiguous()
-        attn_output, _, _ = _flash_attn_forward(
-            query_states,
-            key_states,
-            value_states,
-            # attn_mask=causal_mask,
-            # dropout_p=self.attention_dropout if self.training else 0.0,
-            causal=True,
-        )
-        # attn_output = attn_output.transpose(0, 2, 1, 3).contiguous()
-        # ed_atten = time.perf_counter()
-        # atten_time += ed_atten - st_atten
-        # attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, -1)
         attn_output = self.o_proj(attn_output)
 
-    # return attn_output, None, past_key_value
-    # ed_forward = time.perf_counter()
-    # forward_time += ed_forward - st_forward
     return attn_output, None
 
 
-def set_flash_attn_triton_llama2(model):
+def set_sage_attn_triton_8to16(model):
     for layer in model.model.layers:
-        layer.self_attn.forward = types.MethodType(LlamaFlashAttnForward, layer.self_attn)
+        layer.self_attn.forward = types.MethodType(LlamaSageAttnForward, layer.self_attn)
 
     
