@@ -32,6 +32,11 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
         diag_tile = 0
         sink_tile = 0
 
+    # print(f"diag_tile: {diag_tile}, sink_tile: {sink_tile}, block_scale_type: {block_scale_type}, \
+    #     quant_granularity: {quant_granularity}, qk_dtype: {qk_dtype}, ")
+    # import pdb; pdb.set_trace()
+
+
     torch.cuda.set_device(v.device)
     if 'diag' in block_scale_type and (not pre_quant):
         assert fuse_mp_quant == False, "fuse_mp_quant must be False when using oneline quant"
@@ -275,6 +280,12 @@ def block_scaled_batched_attn_kernel(  #
             k_scale_2_offset = off_z * stride_skb_2 + off_h * stride_skh_2
             q_scale_2_ptr = q_scale_2 + q_scale_2_offset + pid_m * stride_sqm_2 + tl.arange(0, BLOCK_M)[:, None]  # BLOCK_M
             k_scale_2_ptr = k_scale_2 + k_scale_2_offset + tl.arange(0, BLOCK_N)[None, :]  # BLOCK_N
+            scale_q_2 = tl.load(q_scale_2_ptr)
+        elif quant_granularity == 3: # tensorwise - Q, K
+            q_scale_2_offset = off_z * stride_sqb_2 + off_h * stride_sqh_2
+            k_scale_2_offset = off_z * stride_skb_2 + off_h * stride_skh_2
+            q_scale_2_ptr = q_scale_2 + q_scale_2_offset
+            k_scale_2_ptr = k_scale_2 + k_scale_2_offset
             scale_q_2 = tl.load(q_scale_2_ptr)
 
 
@@ -650,6 +661,12 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
             k_scale_2_offset = off_z * stride_skb_2 + off_h * stride_skh_2
             q_scale_2_ptr = q_scale_2 + q_scale_2_offset + pid_m * stride_sqm_2 + tl.arange(0, BLOCK_M)[:, None]  # BLOCK_M
             k_scale_2_ptr = k_scale_2 + k_scale_2_offset + tl.arange(0, BLOCK_N)[None, :]  # BLOCK_N
+            scale_q_2 = tl.load(q_scale_2_ptr)
+        elif quant_granularity == 3: # tensorwise - Q, K
+            q_scale_2_offset = off_z * stride_sqb_2 + off_h * stride_sqh_2
+            k_scale_2_offset = off_z * stride_skb_2 + off_h * stride_skh_2
+            q_scale_2_ptr = q_scale_2 + q_scale_2_offset
+            k_scale_2_ptr = k_scale_2 + k_scale_2_offset
             scale_q_2 = tl.load(q_scale_2_ptr)
 
     # 简化scale load，使用2D模式
@@ -1389,6 +1406,8 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
         quant_granularity = 1
     elif quant_granularity == "tokenwise":
         quant_granularity = 2
+    elif quant_granularity == "tensorwise":
+        quant_granularity = 3
     else:
         raise ValueError(f"Unsupported quant_granularity: {quant_granularity}")
 

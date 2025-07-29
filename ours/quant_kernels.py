@@ -104,6 +104,13 @@ def quant_mxfp8_kernel(Input, Output, Scale, Scale_q, L,
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale, mask=offs_n[:, None] < L)
+        elif dual_scale_type == 3:
+            scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q  # per channel scale
+            # scale = tl.max(tl.abs(x), axis=0, keep_dims=True) / (2**3)   # mxfp4 range: [-6, 6]
+            # scale += 0.0000001
+            scale = tl.load(scale_ptrs_2)
+            x = x / scale
+            # tl.store(scale_ptrs_2, scale)
         else:
             x = x
             
@@ -169,7 +176,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     if dual_scale:
         if dual_scale_type == 0:
             scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q + off_blk  # per block scale
-            scale = tl.max(tl.abs(x)) / (448*6)# mxfp4 range: [-6, 6]
+            scale = tl.max(tl.abs(x)) / (1)# mxfp4 range: [-6, 6]
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale)
@@ -181,10 +188,16 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
             tl.store(scale_ptrs_2, scale)
         elif dual_scale_type == 2:
             scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q + offs_n[:, None] # per token scale
-            scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / (2**11) # mxfp4 range: [-6, 6]
+            scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / (1) # mxfp4 range: [-6, 6]
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale, mask=offs_n[:, None] < L)
+        elif dual_scale_type == 3:
+            scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q  # per channel scale
+            # scale = tl.max(tl.abs(x), axis=0, keep_dims=True) / (2**3)   # mxfp4 range: [-6, 6]
+            # scale += 0.0000001
+            scale = tl.load(scale_ptrs_2)
+            x = x / scale
         else:
             x = x
     else:

@@ -14,7 +14,7 @@ from ours.kernel_selection import MXFPAttention
 from scripts.debug3 import mxfp_attn_debug
 
 def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, smooth_k=False, \
-    dual_scale=False, pre_quant=False, fuse_mp_quant=False, fp8_tile_num=1):
+    dual_scale=False, pre_quant=False, fuse_mp_quant=False, diag_tile=1, sink_tile=1, quant_granularity=None, qk_dtype=None):
     for layer_id, layer in enumerate(model.model.layers):
 
         setattr(layer.self_attn, 'mxfp_attention', MXFPAttention(layer_idx=layer_id, 
@@ -25,7 +25,10 @@ def set_mxfp_attn_llama(model, verbose=False, kernel_name=None, mxfp_bw=None, sm
                                                                     dual_scale=dual_scale,
                                                                     pre_quant=pre_quant,
                                                                     fuse_mp_quant=fuse_mp_quant,
-                                                                    fp8_tile_num=fp8_tile_num))
+                                                                    diag_tile=diag_tile, 
+                                                                    sink_tile=sink_tile,
+                                                                    quant_granularity=quant_granularity,
+                                                                    qk_dtype=qk_dtype))
         # layer.self_attn.sparse_attention.device = next(layer.self_attn.parameters()).device
 
         old_forward = layer.self_attn.forward

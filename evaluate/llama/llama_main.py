@@ -81,15 +81,17 @@ def main():
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
+    parser.add_argument('--quant_granularity', type=str, default='tokenwise', help="quant granularity")
 
     parser.add_argument('--pre_quant', type=bool, default=False, help="pre quant")
     parser.add_argument('--fuse_mp_quant', type=bool, default=False, help="fuse mp quant")
-    parser.add_argument('--fp8_tile_num', type=int, default=1, help="fp8 tile num")
+    parser.add_argument('--diag_tile', type=int, default=1, help="diag tile")
+    parser.add_argument('--sink_tile', type=int, default=1, help="sink tile")
+    parser.add_argument('--qk_dtype', type=str, default='e5m2', help="qk dtype")
 
     # 解析参数
     args = parser.parse_args()
     assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
-    assert args.fp8_tile_num > 0, "fp8_tile_num must be greater than 0"
 
     print("***** args *****")
     print(f"    - model: {args.model}")
@@ -108,6 +110,10 @@ def main():
         print(f"    - mxfp_bw: {args.mxfp_bw}")
         print(f"    - smooth_k: {args.smooth_k}")
         print(f"    - dual_scale: {args.dual_scale}")
+        print(f"    - diag_tile: {args.diag_tile}")
+        print(f"    - sink_tile: {args.sink_tile}")
+        print(f"    - quant_granularity: {args.quant_granularity}")
+        print(f"    - qk_dtype: {args.qk_dtype}")
     elif "spargeattn" in args.kernel_name:
         print(f"    - l1: {args.l1}")
         print(f"    - pv_l1: {args.pv_l1}")
@@ -253,7 +259,7 @@ def main():
     elif "mxfp_attn" in args.kernel_name:
         set_mxfp_attn_llama(model, verbose=args.verbose, kernel_name=args.kernel_name, mxfp_bw=args.mxfp_bw, \
             smooth_k=args.smooth_k, dual_scale=args.dual_scale, pre_quant=args.pre_quant, fuse_mp_quant=args.fuse_mp_quant,
-            fp8_tile_num=args.fp8_tile_num)
+            diag_tile=args.diag_tile, sink_tile=args.sink_tile, quant_granularity=args.quant_granularity, qk_dtype=args.qk_dtype)
         print(f"replace mxfp_attn {args.mxfp_bw}!")
     elif "flash_attn" in args.kernel_name:
         set_flash_attn_triton_llama(model, smooth_k=args.smooth_k)

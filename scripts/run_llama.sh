@@ -1,5 +1,5 @@
 # export PYTHONPATH=.
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=6
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # wandb offline
 
@@ -35,13 +35,17 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # MODEL_NAME=llama3-3-70b
 MODEL_NAME=llama-3.2-3b-instruct
 # MODEL_NAME=llama-3.1-8b-instruct
-KERNEL_NAME=flash_attn
-BITWIDTH=fp16
+KERNEL_NAME=mxfp_attn
+BITWIDTH=mixed
 PRE_QUANT=True
 FUSE_MP_QUANT=True
-DATASET_NAME=dureader
-FP8_TILE_NUM=1
-OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_PRE_${PRE_QUANT}_FUSE_${FUSE_MP_QUANT}_TILE_${FP8_TILE_NUM}
+DATASET_NAME=narrativeqa  # 2wikimqa
+DIAG_TILE=1
+SINK_TILE=1
+QUANT_GRANULARITY=blockwise
+QK_DTYPE=e4m3
+OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}
+#_${QUANT_GRANULARITY}
 
 rm -rf $OUTPUT_PATH
 mkdir -p $OUTPUT_PATH
@@ -57,11 +61,15 @@ python evaluate/llama/llama_main.py \
     --smooth_k \
     --pre_quant $PRE_QUANT \
     --fuse_mp_quant $FUSE_MP_QUANT \
-    --fp8_tile_num $FP8_TILE_NUM \
+    --diag_tile $DIAG_TILE \
+    --sink_tile $SINK_TILE \
+    --quant_granularity $QUANT_GRANULARITY \
+    --qk_dtype $QK_DTYPE \
     --get_pred \
     --compute_accuracy \
-    --num_fewshots 5 \
     2>&1 | tee $OUTPUT_PATH/all_tasks.log
+    # --dual_scale \
+    # --num_fewshots 5 \
     # --test_speedup \
     # --get_pred \
     # --compute_accuracy \

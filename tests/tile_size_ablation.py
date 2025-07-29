@@ -102,8 +102,8 @@ def test_tile_size_ablation():
     block_scale_type = "mixed"  # mixed, nvfp4, mxfp8, mxfp4
     qk_dtype = 'e4m3'  # e4m3, e5m2
     smooth_k = True
-    dual_scale = True
-    quant_granularity = "tokenwise"  # tokenwise, blockwise
+    dual_scale = False
+    quant_granularity = "tensorwise"  # tokenwise, blockwise, tensorwise
 
     print(f"block_scale_type: {block_scale_type}, qk_dtype: {qk_dtype}, dual_scale: {dual_scale}, quant_granularity: {quant_granularity}")
 
@@ -132,10 +132,10 @@ def test_tile_size_ablation():
 
     results = {}
     # try:
-    for sink_size in [0,1,2,4,6,8,16,32]:
-    # for sink_size in []:
-        for tile_size in [0,1,2,4,8,16,32]:# 4, 8, 16]: #  8, 16, 32]:
-        # for tile_size in [0]:# 4, 8, 16]: #  8, 16, 32]:
+    # for sink_size in [0,1,2,4,6,8,16,32]:
+    for sink_size in [1]:
+        # for tile_size in [0,1,2,4,8,16,32]:# 4, 8, 16]: #  8, 16, 32]:
+        for tile_size in [1]:# 4, 8, 16]: #  8, 16, 32]:
             print(f"fp8_tile_num={tile_size}, sink_size={sink_size}")
             results[f"{tile_size}_{sink_size}"] = {"time_total": 0, "ops": 0, "Cossim": 0, "L1": 0, "RMSE": 0, "PSNR": 0}
             out, time_total, ops = measure_time(
