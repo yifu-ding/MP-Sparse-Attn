@@ -8,7 +8,7 @@ import time
 import numpy as np
 from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
 # from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
-from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4, quant_mxfp8e5_nvfp4, quant_nvfp4
+# from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4, quant_mxfp8e5_nvfp4, quant_nvfp4
 import random
 import os
 from ours.modify_mxfp_attn import precision_metric
@@ -99,11 +99,11 @@ def test_tile_size_ablation():
     kv_len = 4096
     head_dim = 128
     is_causal = True
-    block_scale_type = "mxfp8_diag"
-    qk_dtype = 'e4m3'
+    block_scale_type = "mixed"  # mixed, nvfp4, mxfp8, mxfp4
+    qk_dtype = 'e4m3'  # e4m3, e5m2
     smooth_k = True
     dual_scale = True
-    quant_granularity = "tokenwise"
+    quant_granularity = "tokenwise"  # tokenwise, blockwise
 
     print(f"block_scale_type: {block_scale_type}, qk_dtype: {qk_dtype}, dual_scale: {dual_scale}, quant_granularity: {quant_granularity}")
 
@@ -132,16 +132,16 @@ def test_tile_size_ablation():
 
     results = {}
     # try:
-    for sink_size in [0,1,2,4,6,8,16]:
-        for tile_size in [0,1,2,4,6,8,16]:# 4, 8, 16]: #  8, 16, 32]:
-    # for sink_size in [0]:
-    #     for tile_size in [0]:# 4, 8, 16]: #  8, 16, 32]:
+    for sink_size in [0,1,2,4,6,8,16,32]:
+    # for sink_size in []:
+        for tile_size in [0,1,2,4,8,16,32]:# 4, 8, 16]: #  8, 16, 32]:
+        # for tile_size in [0]:# 4, 8, 16]: #  8, 16, 32]:
             print(f"fp8_tile_num={tile_size}, sink_size={sink_size}")
             results[f"{tile_size}_{sink_size}"] = {"time_total": 0, "ops": 0, "Cossim": 0, "L1": 0, "RMSE": 0, "PSNR": 0}
             out, time_total, ops = measure_time(
                 mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, \
                     smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity, \
-                    fuse_mp_quant=True, pre_quant=True, fp8_tile_num=tile_size, sink_size=sink_size, \
+                    fuse_mp_quant=True, pre_quant=True, diag_tile=tile_size, sink_tile=sink_size, \
                     qk_dtype=qk_dtype  # save_qk=True
             )
             # import pdb; pdb.set_trace()

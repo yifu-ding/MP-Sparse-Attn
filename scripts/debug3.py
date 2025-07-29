@@ -3,8 +3,8 @@ import os
 from ours.mxfp_attn_kernel import mxfp_attn_kernel
 # from ours.modify_mxfp_attn import precision_metric
 from torch.nn import functional as F
-from tests.test_quant import quant_mxfp8e5, test_quant_mxfp4_input_quant_tensor
-from ours.quant_kernels import quant_mxfp4, quant_nvfp4_per_channel, quant_nvfp4, quant_mxfp4_per_channel
+# from tests.test_quant import quant_mxfp8e5, test_quant_mxfp4_input_quant_tensor
+# from ours.quant_kernels import quant_mxfp4, quant_nvfp4_per_channel, quant_nvfp4, quant_mxfp4_per_channel
 from tests.flash_attn_triton import _flash_attn_forward, flash_attn_func #, flash_attn_varlen_func
 from tests.flash_attn_triton_residual import _flash_attn_forward_residual
 from einops import rearrange, repeat

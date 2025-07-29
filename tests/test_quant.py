@@ -1,7 +1,7 @@
 import torch
 # from spas_sage_attn.quant_per_block import per_block_int8
-from ours.quant_kernels import quant_mxfp8e5, quant_mxfp4, quant_nvfp4
-from ours.quant_kernels import quant_nvfp4_per_channel, quant_mxfp4_per_channel
+# from ours.quant_kernels import quant_mxfp8e5, quant_mxfp4, quant_nvfp4
+# from ours.quant_kernels import quant_nvfp4_per_channel, quant_mxfp4_per_channel
 from mxfp_matmul_bak.block_scaled_matmul import initialize_block_scaled_from_tensor, block_scaled_matmul
 from mxfp_matmul_bak.batched_block_scaled_matmul import initialize_block_scaled_batched_from_tensor, block_scaled_batched_matmul
 from torch.nn import functional as F
