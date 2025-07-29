@@ -35,7 +35,7 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # MODEL_NAME=llama3-3-70b
 MODEL_NAME=llama-3.2-3b-instruct
 # MODEL_NAME=llama-3.1-8b-instruct
-KERNEL_NAME=mxfp_attn
+KERNEL_NAME=flash_attn
 BITWIDTH=mixed
 PRE_QUANT=True
 FUSE_MP_QUANT=True
@@ -69,10 +69,14 @@ python evaluate/llama/llama_main.py \
     --get_pred \
     --compute_accuracy \
     --qk_dtype $QK_DTYPE \
+    --num_fewshots 5 \
     2>&1 | tee $OUTPUT_PATH/all_tasks.log
+
+sh scripts/send_email.sh $OUTPUT_PATH
+
+    # --num_fewshots 5 \
     # --get_pred \
     # --compute_accuracy \
-    # --num_fewshots 5 \
     # --get_pred \
     # --compute_accuracy \
     # --dual_scale \

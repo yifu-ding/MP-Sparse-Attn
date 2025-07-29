@@ -35,17 +35,17 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # MODEL_NAME=llama3-3-70b
 MODEL_NAME=llama-3.2-3b-instruct
 # MODEL_NAME=llama-3.1-8b-instruct
-KERNEL_NAME=sage_attn
+KERNEL_NAME=mxfp_attn
 BITWIDTH=mixed
 PRE_QUANT=True
 FUSE_MP_QUANT=True
-DATASET_NAME=narrativeqa  # 2wikimqa
+DATASET_NAME=all  # 2wikimqa
 DIAG_TILE=1
 SINK_TILE=1
 QUANT_GRANULARITY=tokenwise
 QK_DTYPE=e4m3
-OUTPUT_PATH=./results/speed_${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}_${QUANT_GRANULARITY}
-# OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}
+# OUTPUT_PATH=./results/speed_${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}_${QUANT_GRANULARITY}
+OUTPUT_PATH=./results/speed_${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}
 #_${QUANT_GRANULARITY}
 
 rm -rf $OUTPUT_PATH
@@ -65,31 +65,9 @@ python evaluate/llama/llama_main.py \
     --diag_tile $DIAG_TILE \
     --sink_tile $SINK_TILE \
     --quant_granularity $QUANT_GRANULARITY \
-    --dual_scale \
     --qk_dtype $QK_DTYPE \
-    --num_fewshots 5 \
     --test_speedup \
     2>&1 | tee $OUTPUT_PATH/all_tasks.log
-    # --get_pred \
-    # --compute_accuracy \
-    # --num_fewshots 5 \
-    # --get_pred \
-    # --compute_accuracy \
     # --dual_scale \
-    # --verbose \
-    # --smooth_k \
-    # --use_wandb \
-      # --get_pred \
-    # --compute_accuracy \
 
-
-# # baseline: fp16 transformer attention
-# python evaluate/llama/llama_main.py \
-#     --model Llama-3.2-3B-Instruct \
-#     --device cuda \
-#     --output_path ./results \
-#     --num_fewshots 50 \
-#     --test_speedup \
-#     --test_accuracy \
-#     --test_dataset_name dureader \
-#     # --use_wandb \
+sh scripts/send_email.sh $OUTPUT_PATH

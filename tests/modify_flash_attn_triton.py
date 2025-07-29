@@ -6,7 +6,7 @@ from transformers.cache_utils import Cache
 import types
 import torch.nn as nn
 from tests.flash_attn_triton import flash_attn_func
-from flash_attn.flash_attn_triton import _flash_attn_forward
+# from flash_attn.flash_attn_triton import _flash_attn_forward
 
 class FlashAttentionTriton(nn.Module):
     def __init__(self, layer_idx=-1, smooth_k=False):
@@ -232,41 +232,22 @@ def LlamaFlashAttnForward(
         key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
         value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
         
-        '''
-        attn_output = sageattn_qk_int8_pv_fp16_triton(
-            query_states,
-            key_states,
-            value_states,
-            # attn_mask=causal_mask,
-            # dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=True,
-        )
-        '''
-        
-        
-        # st_atten = time.perf_counter()
-
         query_states = query_states.permute(0, 2, 1, 3).contiguous()
         key_states = key_states.permute(0, 2, 1, 3).contiguous()
         value_states = value_states.permute(0, 2, 1, 3).contiguous()
-        attn_output, _, _ = _flash_attn_forward(
+        attn_output, _, _ = flash_attn_func(
             query_states,
             key_states,
             value_states,
-            # attn_mask=causal_mask,
-            # dropout_p=self.attention_dropout if self.training else 0.0,
-            causal=True,
+            None,
+            True,
+            None,
         )
-        # attn_output = attn_output.transpose(0, 2, 1, 3).contiguous()
-        # ed_atten = time.perf_counter()
-        # atten_time += ed_atten - st_atten
+        attn_output = attn_output.transpose(0, 2, 1, 3).contiguous()
         # attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, -1)
         attn_output = self.o_proj(attn_output)
 
-    # return attn_output, None, past_key_value
-    # ed_forward = time.perf_counter()
-    # forward_time += ed_forward - st_forward
     return attn_output, None
 
 

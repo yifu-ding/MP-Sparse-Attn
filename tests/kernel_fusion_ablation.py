@@ -6,16 +6,17 @@ import time
 # from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_block_int8, forward as forward_triton
 # from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
-from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
+from ours.mxfp_attn_func import mxfp_attn_kernel, block_scaled_batched_attn
 # from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
-from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4, quant_mxfp8e5_nvfp4, quant_nvfp4
+from ours.quant_funcs import quant_mxfp8, quant_mxfp4, quant_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4
 import random
 import os
 from ours.modify_mxfp_attn import precision_metric
 from ours.mxfp import MXFP4Tensor, MXScaleTensor, MXFP8Tensor
 import triton
 import triton.language as tl
-
+from tests.tile_size_ablation import load_attention_states
+from tests.test_time_breakdown import test_time_breakdown
 
 iter_times = 10
 
@@ -532,5 +533,53 @@ def test_kernel_fusion_benchmark():
         print(f"{func_name:<45} | {avg_time * 1000 :10.3f} | {ops:10.3f}")
 
 
+def test_attn_time_breakdown():
+    batch_size = 1
+    num_heads = 24
+    qo_len = 4096
+    kv_len = 4096
+    head_dim = 128
+    is_causal = True
+    block_scale_type = "mixed"  # mixed, nvfp4, mxfp8, mxfp4
+    qk_dtype = 'e4m3'  # e4m3, e5m2
+    smooth_k = True
+    dual_scale = True
+    quant_granularity = "tensorwise"  # tokenwise, blockwise, tensorwise
+    tile_size = 1
+    sink_size = 1
+    # q_pack_along_lastdim = False
+    # k_pack_along_lastdim = False
+
+    print(f"block_scale_type: {block_scale_type}, qk_dtype: {qk_dtype}, \
+        dual_scale: {dual_scale}, quant_granularity: {quant_granularity}")
+
+    # q = torch.randn(batch_size, num_heads, qo_len, head_dim,
+    #                 device='cuda', dtype=torch.float16)
+    # k = torch.randn(batch_size, num_heads, kv_len, head_dim, 
+    #                 device='cuda', dtype=torch.float16)
+    # v = torch.randn(batch_size, num_heads, kv_len, head_dim,
+    #                 device='cuda', dtype=torch.float16)
+    query_states, key_states, value_states = load_attention_states()
+    q = query_states
+    k = key_states
+    v = value_states
+
+    kwargs = {
+        "is_causal": is_causal,
+        "smooth_k": smooth_k,
+        "block_scale_type": block_scale_type,
+        "dual_scale": dual_scale,
+        "quant_granularity": quant_granularity,
+        "fuse_mp_quant": True,
+        "pre_quant": True,
+        "fuse_pack": True,
+        "diag_tile": tile_size,
+        "sink_tile": sink_size,
+        "qk_dtype": qk_dtype,
+    }
+    test_time_breakdown(mxfp_attn_kernel, q, k, v, **kwargs)
+
+
 if __name__ == "__main__":
-    test_kernel_fusion_benchmark()
+    # test_kernel_fusion_benchmark()
+    test_attn_time_breakdown()

@@ -31,6 +31,7 @@ from datasets import load_dataset
 from evaluate.datasets.text.longbench.eval import scorer_e, scorer
 # import torch.multiprocessing as mp
 from tests.modify_flash_attn_triton import set_flash_attn_triton_llama
+from tests.modify_sage_attn_triton import set_sage_attn_triton_qk8_pv16
 from helper import print_result_as_md
 
 def seed_everything(seed):
@@ -78,7 +79,7 @@ def main():
     # our method
     parser.add_argument('--skip_thresh', type=float, default=None, help="skip threshold")
     parser.add_argument('--kernel_name', type=str, default=None, help="kernel name", \
-        choices=["online_routing", "mxfp_attn", "mxfp_attn_debug", "native", 'spargeattn', 'flash_attn'])
+        choices=["online_routing", "mxfp_attn", "mxfp_attn_debug", "native", 'spargeattn', 'flash_attn', 'sage_attn'])
     parser.add_argument('--mxfp_bw', type=str, default='mxfp8', help="mxfp bw")
     parser.add_argument('--smooth_k', action='store_true', help="smooth k")
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
@@ -265,6 +266,9 @@ def main():
     elif "flash_attn" in args.kernel_name:
         set_flash_attn_triton_llama(model, smooth_k=args.smooth_k)
         print("replace flash_attn!")
+    elif "sage_attn" in args.kernel_name:
+        set_sage_attn_triton_qk8_pv16(model)
+        print("replace sage_attn!")
     elif args.kernel_name == "native":
         print("use the original transformer attention!")
     else:

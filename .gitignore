@@ -17,3 +17,4 @@ saved_files/
 assets/
 *.hatchet
 *.pth
+.log
