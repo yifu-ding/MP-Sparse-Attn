@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=3
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # test our kernel
@@ -19,7 +19,7 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 
 # TRITON_INTERPRET=1 python test_batched_matmul.py
 
-# export TRITON_INTERPRET=1
+export TRITON_INTERPRET=1
 export TRITON_DEBUG=1
 export TRITON_ALLOW_NON_CONSTEXPR_GLOBALS=1
 export TRITON_IR_VERBOSE=1
@@ -33,4 +33,6 @@ elif [ "$1" = "3" ]; then
     python scripts/debug3.py
 elif [ "$1" = "4" ]; then
     python tests/test_quant.py
+elif [ "$1" = "5" ]; then
+    python tests/tile_size_ablation.py
 fi
