@@ -26,7 +26,7 @@ import numpy as np
 import warnings
 # from einops import rearrange
 from ours.online_routing import online_routing_attn
-from ours.mxfp_attn_kernel import mxfp_attn_kernel
+from ours.mxfp_attn_func import mxfp_attn_kernel
 from scripts.debug3 import mxfp_attn_debug
 
 

@@ -6,7 +6,7 @@ import time
 # from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_block_int8, forward as forward_triton
 # from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
-from ours.mxfp_attn_kernel import mxfp_attn_kernel, block_scaled_batched_attn
+from ours.mxfp_attn_func import mxfp_attn_kernel, block_scaled_batched_attn
 # from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
 # from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4, quant_mxfp8e5_nvfp4, quant_nvfp4
 import random
@@ -16,6 +16,7 @@ from ours.mxfp import MXFP4Tensor, MXScaleTensor, MXFP8Tensor
 import triton
 import triton.language as tl
 import torch.nn.functional as F
+from helper import print_result_as_md
 
 iter_times = 1
 
@@ -102,10 +103,13 @@ def test_tile_size_ablation():
     block_scale_type = "mixed"  # mixed, nvfp4, mxfp8, mxfp4
     qk_dtype = 'e4m3'  # e4m3, e5m2
     smooth_k = True
-    dual_scale = False
+    dual_scale = True
     quant_granularity = "tensorwise"  # tokenwise, blockwise, tensorwise
+    # q_pack_along_lastdim = False
+    # k_pack_along_lastdim = False
 
-    print(f"block_scale_type: {block_scale_type}, qk_dtype: {qk_dtype}, dual_scale: {dual_scale}, quant_granularity: {quant_granularity}")
+    print(f"block_scale_type: {block_scale_type}, qk_dtype: {qk_dtype}, \
+        dual_scale: {dual_scale}, quant_granularity: {quant_granularity}")
 
     # q = torch.randn(batch_size, num_heads, qo_len, head_dim,
     #                 device='cuda', dtype=torch.float16)
@@ -139,10 +143,12 @@ def test_tile_size_ablation():
             print(f"fp8_tile_num={tile_size}, sink_size={sink_size}")
             results[f"{tile_size}_{sink_size}"] = {"time_total": 0, "ops": 0, "Cossim": 0, "L1": 0, "RMSE": 0, "PSNR": 0}
             out, time_total, ops = measure_time(
-                mxfp_attn_kernel, q, k, v, is_causal=is_causal, block_scale_type=block_scale_type, \
-                    smooth_k=smooth_k, dual_scale=dual_scale, quant_granularity=quant_granularity, \
-                    fuse_mp_quant=True, pre_quant=True, diag_tile=tile_size, sink_tile=sink_size, \
-                    qk_dtype=qk_dtype  # save_qk=True
+                mxfp_attn_kernel, q, k, v, is_causal=is_causal, smooth_k=smooth_k, block_scale_type=block_scale_type, \
+                    dual_scale=dual_scale, quant_granularity=quant_granularity, \
+                    fuse_mp_quant=True, pre_quant=True, fuse_pack=True, \
+                    diag_tile=tile_size, sink_tile=sink_size, \
+                    qk_dtype=qk_dtype, \
+                    # q_pack_along_lastdim=q_pack_along_lastdim, k_pack_along_lastdim=k_pack_along_lastdim  # save_qk=True
             )
             # import pdb; pdb.set_trace()
             measures = precision_metric(out, out_torch)  # {"Cossim": sim, "L1": l1, "RMSE": rmse, "PSNR": psnr}
@@ -155,12 +161,15 @@ def test_tile_size_ablation():
     #     pass
 
     # 打印结果
-    print(f"| {'tile size':<10} | {'sink size':<10} | {'Time (us)':>10} | {'ops':>10} | {'Cossim':>10} | {'L1':>10} | {'RMSE':>10} | {'PSNR':>10} |")
-    print("|" + "------|" * 8)
+    # print(f"| {'tile size':<10} | {'sink size':<10} | {'Time (us)':>10} | {'ops':>10} | {'Cossim':>10} | {'L1':>10} | {'RMSE':>10} | {'PSNR':>10} |")
+    # print("|" + "------|" * 8)
 
-    for size, measures in results.items():
-        tile_size, sink_size = size.split("_")
-        print(f"| {tile_size:<10} | {sink_size:<10} | {measures['time_total'] :10.3f} | {measures['ops']:10.3f} | {measures['Cossim']:10.3f} | {measures['L1']:10.3f} | {measures['RMSE']:10.3f} | {measures['PSNR']:10.3f} |")
+    # for size, measures in results.items():
+    #     tile_size, sink_size = size.split("_")
+    #     print(f"| {tile_size:<10} | {sink_size:<10} | {measures['time_total'] :10.3f} | {measures['ops']:10.3f} | {measures['Cossim']:10.3f} | {measures['L1']:10.3f} | {measures['RMSE']:10.3f} | {measures['PSNR']:10.3f} |")
+
+    print_result_as_md(results)
+
 
 if __name__ == "__main__":
     test_tile_size_ablation()

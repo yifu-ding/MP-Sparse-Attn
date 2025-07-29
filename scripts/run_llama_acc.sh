@@ -1,5 +1,5 @@
 # export PYTHONPATH=.
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=6
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # wandb offline
 
@@ -35,7 +35,7 @@ export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
 # MODEL_NAME=llama3-3-70b
 MODEL_NAME=llama-3.2-3b-instruct
 # MODEL_NAME=llama-3.1-8b-instruct
-KERNEL_NAME=sage_attn
+KERNEL_NAME=mxfp_attn
 BITWIDTH=mixed
 PRE_QUANT=True
 FUSE_MP_QUANT=True
@@ -44,7 +44,7 @@ DIAG_TILE=1
 SINK_TILE=1
 QUANT_GRANULARITY=tokenwise
 QK_DTYPE=e4m3
-OUTPUT_PATH=./results/speed_${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}_${QUANT_GRANULARITY}
+OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}_${QUANT_GRANULARITY}
 # OUTPUT_PATH=./results/${KERNEL_NAME}_${BITWIDTH}_${MODEL_NAME}_${DATASET_NAME}_TILE_${DIAG_TILE}+${SINK_TILE}_QK_${QK_DTYPE}
 #_${QUANT_GRANULARITY}
 
@@ -66,9 +66,9 @@ python evaluate/llama/llama_main.py \
     --sink_tile $SINK_TILE \
     --quant_granularity $QUANT_GRANULARITY \
     --dual_scale \
+    --get_pred \
+    --compute_accuracy \
     --qk_dtype $QK_DTYPE \
-    --num_fewshots 5 \
-    --test_speedup \
     2>&1 | tee $OUTPUT_PATH/all_tasks.log
     # --get_pred \
     # --compute_accuracy \

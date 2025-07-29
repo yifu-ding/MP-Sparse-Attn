@@ -1,0 +1,46 @@
+Channels:
+ - conda-forge
+ - defaults
+Platform: linux-64
+Collecting package metadata (repodata.json): ...working... done
+Solving environment: ...working... done
+
+## Package Plan ##
+
+  environment location: /home/tao/miniconda3/envs/triton340
+
+  added / updated specs:
+    - libstdcxx-ng
+
+
+The following packages will be downloaded:
+
+    package                    |            build
+    ---------------------------|-----------------
+    ca-certificates-2025.7.14  |       hbd8a1cb_0         152 KB  conda-forge
+    certifi-2025.7.14          |     pyhd8ed1ab_0         156 KB  conda-forge
+    ------------------------------------------------------------
+                                           Total:         308 KB
+
+The following packages will be UPDATED:
+
+  ca-certificates    pkgs/main/linux-64::ca-certificates-2~ --> conda-forge/noarch::ca-certificates-2025.7.14-hbd8a1cb_0 
+  certifi               pypi/pypi::certifi-2025.1.31-pypi_0 --> conda-forge/noarch::certifi-2025.7.14-pyhd8ed1ab_0 
+  libstdcxx-ng       pkgs/main::libstdcxx-ng-11.2.0-h12345~ --> conda-forge::libstdcxx-ng-13.2.0-hc0a3c3a_7 
+
+The following packages will be SUPERSEDED by a higher-priority channel:
+
+  platformdirs         pypi/pypi::platformdirs-4.3.8-pypi_0 --> pkgs/main/linux-64::platformdirs-4.3.7-py311h06a4308_0 
+  tzdata                    pypi/pypi::tzdata-2025.2-pypi_0 --> pkgs/main/noarch::tzdata-2025a-h04d1e81_0 
+
+
+Proceed ([y]/n)? 
+
+Downloading and Extracting Packages: ...working...certifi-2025.7.14    | 156 KB    |            |   0% 
+ca-certificates-2025 | 152 KB    |            |   0% [A
+ca-certificates-2025 | 152 KB    | ########## | 100% [A
+ca-certificates-2025 | 152 KB    | ########## | 100% [Acertifi-2025.7.14    | 156 KB    | #          |  10% certifi-2025.7.14    | 156 KB    | ########## | 100% certifi-2025.7.14    | 156 KB    | ########## | 100%                                                      
+                                                     [A done
+Preparing transaction: - done
+Verifying transaction: | / done
+Executing transaction: \ | / - \ | / - \ | done

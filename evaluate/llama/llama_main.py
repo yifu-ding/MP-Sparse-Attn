@@ -31,6 +31,7 @@ from datasets import load_dataset
 from evaluate.datasets.text.longbench.eval import scorer_e, scorer
 # import torch.multiprocessing as mp
 from tests.modify_flash_attn_triton import set_flash_attn_triton_llama
+from helper import print_result_as_md
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -276,6 +277,7 @@ def main():
     # mp.set_start_method('spawn', force=True)
     
     if args.test_speedup:
+        speed_benchmark_results = {}
         for dataset in datasets:
             if args.e:
                 data = load_dataset(
@@ -299,9 +301,14 @@ def main():
                 out_path = os.path.join(out_path_pred, model_name, f"{dataset}.jsonl")
             prompt_format = dataset2prompt[dataset]
             max_gen = dataset2maxlen[dataset]
-            time_per_sample = get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=args.num_fewshots)
+            time_per_sample, avg_token_len = get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path, num_fewshots=args.num_fewshots)
+
             if args.use_wandb:
-                wandb.log({"time_per_sample": time_per_sample})
+                wandb.log({"time_per_sample": time_per_sample, "avg_token_len": avg_token_len})
+            speed_benchmark_results[dataset] = {"time (s/it)": time_per_sample, "avg_token_len": avg_token_len}
+        speed_benchmark_results["avg"] = {'time (s/it)': np.mean([v['time (s/it)'] for v in speed_benchmark_results.values()]), \
+                                          'avg_token_len': np.mean([v['avg_token_len'] for v in speed_benchmark_results.values()])}
+        print_result_as_md(speed_benchmark_results)
 
     if args.get_pred:
         for dataset in datasets:

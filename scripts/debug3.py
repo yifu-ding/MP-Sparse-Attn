@@ -1,6 +1,6 @@
 import torch
 import os
-from ours.mxfp_attn_kernel import mxfp_attn_kernel
+from ours.mxfp_attn_func import mxfp_attn_kernel
 # from ours.modify_mxfp_attn import precision_metric
 from torch.nn import functional as F
 # from tests.test_quant import quant_mxfp8e5, test_quant_mxfp4_input_quant_tensor

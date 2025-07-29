@@ -17,7 +17,7 @@ limitations under the License.
 import torch
 import triton
 import triton.language as tl
-from ours.quant_kernels import quant_fpxint8_kernel, quant_mxfp8_kernel, quant_mxfp8_nvfp4_kernel, quant_nvfp4_kernel, quant_mxfp4_kernel
+from ours.quant_kernels import quant_fpxint8_kernel, quant_mxfp8_kernel, quant_mxfp8_nvfp4_kernel, quant_nvfp4_kernel, quant_mxfp4_kernel, quant_nvfp4_per_channel_kernel
 from ours.mxfp import MXFP4Tensor, MXFP8Tensor
 
 def quant_fpxint8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
@@ -77,7 +77,7 @@ def quant_fpxint8(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
 
 
 def quant_mxfp8(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", quant_granularity="blockwise", \
-    dual_scale=False, qk_dtype="e5m2", pack_along_lastdim=False):
+    dual_scale=False, qk_dtype="e5m2", fuse_pack=False):
     q_fp8 = torch.empty(q.shape, dtype=torch.float8_e5m2 if qk_dtype == "e5m2" else torch.float8_e4m3fn, device=q.device)
     k_fp8 = torch.empty(k.shape, dtype=torch.float8_e5m2 if qk_dtype == "e5m2" else torch.float8_e4m3fn, device=k.device)
 
@@ -168,7 +168,7 @@ def quant_mxfp8(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", qu
 
 
    
-def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False, \
+def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", fuse_pack=False, \
     dual_scale=False, v_quant=False, v=None, quant_granularity="tokenwise", qk_dtype="e5m2"):
 
     q_fp8 = torch.empty(q.shape, dtype=torch.float8_e5m2 if qk_dtype == "e5m2" else torch.float8_e4m3fn, device=q.device)
@@ -183,7 +183,7 @@ def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HN
         stride_bz_k, stride_h_k, stride_seq_k = k.stride(0), k.stride(1), k.stride(2)
         stride_bz_ko, stride_h_ko, stride_seq_ko = k_fp8.stride(0), k_fp8.stride(1), k_fp8.stride(2)
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -254,7 +254,7 @@ def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HN
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
         dual_scale_type=dual_scale_type_q, dual_scale=dual_scale,
-        pack_along_lastdim=pack_along_lastdim, 
+        fuse_pack=fuse_pack, 
         qk_dtype=qk_dtype
     )
 
@@ -270,11 +270,11 @@ def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HN
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,
         dual_scale_type=dual_scale_type_k, dual_scale=dual_scale,
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         qk_dtype=qk_dtype
     )
 
-    if not pack_along_lastdim:
+    if not fuse_pack:
         q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
         q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
         k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
@@ -285,13 +285,13 @@ def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HN
 
 
 def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VEC_SIZE=32, \
-    pack_along_lastdim=False, dual_scale=False, quant_granularity="blockwise", qk_dtype=None):
+    fuse_pack=False, dual_scale=False, quant_granularity="blockwise", qk_dtype=None):
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -310,7 +310,7 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
         _, kv_len, h_kv, _ = k.shape
 
         
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -371,7 +371,7 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
         q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_q,
         dual_scale=dual_scale, 
     )
@@ -385,13 +385,13 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
         k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_k,
         dual_scale=dual_scale, 
     )
 
 
-    if not pack_along_lastdim:
+    if not fuse_pack:
         q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
         q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
         k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
@@ -402,13 +402,13 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
     #     return q_fp4, q_scale, k_fp4, k_scale, None, None
 
 
-def quant_mxfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False, dual_scale=False, quant_granularity="blockwise"):
+def quant_mxfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", fuse_pack=False, dual_scale=False, quant_granularity="blockwise"):
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             # q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -429,7 +429,7 @@ def quant_mxfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
         _, kv_len, h_kv, _ = k.shape
 
         
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             # q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -495,7 +495,7 @@ def quant_mxfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
         q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_q,
         dual_scale=dual_scale, 
     )
@@ -509,7 +509,7 @@ def quant_mxfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
         k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_k,
         dual_scale=dual_scale, 
     )
@@ -521,13 +521,14 @@ def quant_mxfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
 
 
 def quant_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VEC_SIZE=16, \
-    pack_along_lastdim=False, dual_scale=False, quant_granularity="blockwise", qk_dtype=None):
+    fuse_pack=False, dual_scale=False, quant_granularity="blockwise", qk_dtype=None, \
+        q_pack_along_lastdim=True, k_pack_along_lastdim=True):
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -545,7 +546,7 @@ def quant_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
         b, qo_len, h_qo, head_dim = q.shape
         _, kv_len, h_kv, _ = k.shape
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -606,7 +607,7 @@ def quant_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
         q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_q,
         dual_scale=dual_scale, 
     )
@@ -620,12 +621,12 @@ def quant_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
         k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_k,
         dual_scale=dual_scale, 
     )
 
-    if not pack_along_lastdim:
+    if not fuse_pack:
         q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
         q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
         k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
@@ -640,7 +641,7 @@ def get_nvfp4_scale(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND"
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
-        # if pack_along_lastdim:
+        # if fuse_pack:
         #     assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
         #     assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
         #     q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -658,7 +659,7 @@ def get_nvfp4_scale(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND"
         b, qo_len, h_qo, head_dim = q.shape
         _, kv_len, h_kv, _ = k.shape
 
-        # if pack_along_lastdim:
+        # if fuse_pack:
         #     assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
         #     assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
         #     q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -701,13 +702,14 @@ def get_nvfp4_scale(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND"
     )
     return q_scale, k_scale
 
-def quant_nvfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", pack_along_lastdim=False, dual_scale=False, quant_granularity="blockwise"):
+def quant_nvfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", fuse_pack=False, \
+    dual_scale=False, quant_granularity="blockwise"):
 
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             # q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -728,7 +730,7 @@ def quant_nvfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
         _, kv_len, h_kv, _ = k.shape
 
         
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             # q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -787,7 +789,7 @@ def quant_nvfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
         q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_q,
         dual_scale=dual_scale, 
     )
@@ -801,7 +803,7 @@ def quant_nvfp4_per_channel(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layo
         k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_k,
         dual_scale=dual_scale, 
     )

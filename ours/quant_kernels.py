@@ -157,7 +157,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
                     sm_scale, 
                     C: tl.constexpr, BLK: tl.constexpr,   # C: head_dim, BLK: BLKQ 128 or BLKK 64
                     dual_scale_type: tl.constexpr = 0, dual_scale: tl.constexpr = False,
-                    pack_along_lastdim: tl.constexpr = False, qk_dtype: tl.constexpr = 0,
+                    fuse_pack: tl.constexpr = False, qk_dtype: tl.constexpr = 0,
                     ):
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
@@ -176,7 +176,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     if dual_scale:
         if dual_scale_type == 0:
             scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q + off_blk  # per block scale
-            scale = tl.max(tl.abs(x)) / (1)# mxfp4 range: [-6, 6]
+            scale = tl.max(tl.abs(x)) / (2**11) # mxfp4 range: [-6, 6]
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale)
@@ -188,7 +188,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
             tl.store(scale_ptrs_2, scale)
         elif dual_scale_type == 2:
             scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q + offs_n[:, None] # per token scale
-            scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / (1) # mxfp4 range: [-6, 6]
+            scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / (2**11) # mxfp4 range: [-6, 6]
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale, mask=offs_n[:, None] < L)
@@ -235,7 +235,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     
     # 5. pack and store x_quant
     # Pack two e2m1 elements into a single uint8 along the specified dimension.
-    if pack_along_lastdim:
+    if fuse_pack:
         x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
         low, high = tl.split(x_quant_reshaped)
         x_uint8_packed = (high << 4) | low
@@ -292,7 +292,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, Scale_2, L,
                     stride_sz_2, stride_sh_2, stride_sn_2,
                     sm_scale,
                     C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
-                    pack_along_lastdim = False,
+                    fuse_pack = False,
                     dual_scale_type = 0,
                     dual_scale = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
@@ -362,7 +362,7 @@ def quant_mxfp4_kernel(Input, Output, Scale, Scale_2, L,
     # 5. pack and store x_quant
     # Pack two e2m1 elements into a single uint8 along the specified dimension.
     # x_uint8 = tl.reshape(x_quant, x.shape)
-    if pack_along_lastdim:
+    if fuse_pack:
         x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
         low, high = tl.split(x_quant_reshaped)
         x_uint8_packed = (high << 4) | low
@@ -393,7 +393,7 @@ def quant_mxfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
                     stride_sz_2, stride_sh_2, stride_sn_2,
                     sm_scale,
                     C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
-                    pack_along_lastdim = False,
+                    fuse_pack = False,
                     dual_scale_type = 0,
                     dual_scale = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
@@ -465,7 +465,7 @@ def quant_mxfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
     # 5. pack and store x_quant
     # Pack two e2m1 elements into a single uint8 along the specified dimension.
     # x_uint8 = tl.reshape(x_quant, x.shape)
-    if pack_along_lastdim:
+    if fuse_pack:
         x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
         low, high = tl.split(x_quant_reshaped)
         x_uint8_packed = (high << 4) | low
@@ -500,7 +500,7 @@ def quant_nvfp4_kernel(Input, Output, Scale, Scale_2, L,
                     stride_sz_2, stride_sh_2, stride_sn_2,
                     sm_scale,
                     C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
-                    pack_along_lastdim = False,
+                    fuse_pack = False,
                     dual_scale_type = 0,
                     dual_scale = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
@@ -572,7 +572,7 @@ def quant_nvfp4_kernel(Input, Output, Scale, Scale_2, L,
     # 5. pack and store x_quant
     # Pack two e2m1 elements into a single uint8 along the specified dimension.
     # x_uint8 = tl.reshape(x_quant, x.shape)
-    if pack_along_lastdim:
+    if fuse_pack:
         x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
         low, high = tl.split(x_quant_reshaped)
         x_uint8_packed = (high << 4) | low
@@ -634,7 +634,7 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
                     stride_sz_2, stride_sh_2, stride_sn_2,
                     sm_scale,
                     C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
-                    pack_along_lastdim = False,
+                    fuse_pack = False,
                     dual_scale_type = 0,
                     dual_scale = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
     off_blk = tl.program_id(0)
@@ -707,7 +707,7 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
     # 5. pack and store x_quant
     # Pack two e2m1 elements into a single uint8 along the specified dimension.
     # x_uint8 = tl.reshape(x_quant, x.shape)
-    if pack_along_lastdim:
+    if fuse_pack:
         x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
         low, high = tl.split(x_quant_reshaped)
         x_uint8_packed = (high << 4) | low
@@ -740,7 +740,7 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
 
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             # q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -761,7 +761,7 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
         _, kv_len, h_kv, _ = k.shape
 
         
-        if pack_along_lastdim:
+        if fuse_pack:
             assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
             assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
             # q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -820,7 +820,7 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
         q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
         sm_scale=(sm_scale * 1.44269504),
         C=head_dim, BLK=BLKQ,
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_q,
         dual_scale=dual_scale, 
     )
@@ -834,7 +834,7 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
         k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
         sm_scale=1.0,
         C=head_dim, BLK=BLKK,   
-        pack_along_lastdim=pack_along_lastdim,
+        fuse_pack=fuse_pack,
         dual_scale_type=dual_scale_type_k,
         dual_scale=dual_scale, 
     )

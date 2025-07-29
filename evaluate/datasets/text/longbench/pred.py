@@ -131,6 +131,7 @@ def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format,
     start_time = time.time()
     # for json_obj in tqdm(data): 
     num_fewshots = len(list(data)) if num_fewshots == None else num_fewshots
+    inp_token_len = []
     for json_obj in tqdm(list(data)[:num_fewshots]):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
@@ -150,7 +151,8 @@ def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format,
         else:
             input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
-        
+        inp_token_len.append(context_length)
+
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(
                 **input,
@@ -180,8 +182,9 @@ def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format,
         #     f.write('\n')
     # dist.destroy_process_group()
     end_time = time.time()
-    print(f"***** Time taken per sample: {(end_time - start_time)/num_fewshots:.2f} seconds on {dataset}. *****")
-    return (end_time - start_time)/num_fewshots
+    
+    print(f"***** Time taken per sample: {(end_time - start_time)/num_fewshots:.2f} seconds on {dataset}. avg_token_len: {np.mean(inp_token_len):.2f} *****")
+    return (end_time - start_time)/num_fewshots, np.mean(inp_token_len)
 
 def load_model_and_tokenizer(path, model_name, device):
     if "chatglm" in model_name or "internlm" in model_name or "xgen" in model_name:
