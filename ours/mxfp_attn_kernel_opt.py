@@ -106,8 +106,8 @@ def block_scaled_batched_attn_kernel(  #
         output_dtype = tl.bfloat16
 
     # block scale offsets - 参考_attn_fwd的offset计算方式
-    offs_sm = (pid_m * (BLOCK_M // WARP_SIZE_M) + tl.arange(0, BLOCK_M // WARP_SIZE_M)) % qo_len  # [1] when pid_m==1
-    offs_sn = tl.arange(0, BLOCK_N // WARP_SIZE_N) % kv_len 
+    offs_sm = (pid_m * (1) + tl.arange(0, 1)) % qo_len  # [1] when pid_m==1
+    offs_sn = tl.arange(0, 1) % kv_len 
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
@@ -121,7 +121,7 @@ def block_scaled_batched_attn_kernel(  #
     # k_scale_nvfp4_base_offset = k_scale_base_offset * 2
 
     # double quantization scale  
-    if dual_scale:  
+    '''if dual_scale:  
         if quant_granularity == 0: # blockwise - Q, K
             q_scale_2_offset = (off_z * num_h + off_h) * tl.cdiv(qo_len, BLOCK_M)
             k_scale_2_offset = (off_z * (num_h // num_kv_groups) + off_h // num_kv_groups) * tl.cdiv(kv_len, BLOCK_N)  
@@ -147,19 +147,14 @@ def block_scaled_batched_attn_kernel(  #
             k_scale_2_offset = off_z * stride_skb_2 + off_h * stride_skh_2
             q_scale_2_ptr = q_scale_2 + q_scale_2_offset
             k_scale_2_ptr = k_scale_2 + k_scale_2_offset
-            scale_q_2 = tl.load(q_scale_2_ptr)
+            scale_q_2 = tl.load(q_scale_2_ptr)'''
 
 
     # 简化scale load，使用2D模式
-    if USE_2D_SCALE_LOAD:
-        offs_inner = tl.arange(0, (HEAD_DIM // VEC_SIZE // 4) * 32 * 4 * 4)
-        q_scale_ptr = q_scale + q_scale_base_offset + offs_sm[:, None] * stride_sqm + offs_inner[None, :] 
-        k_scale_ptr = k_scale + k_scale_base_offset + offs_sn[:, None] * stride_skn + offs_inner[None, :] 
-        
-        offs_inner_nvfp4 = tl.arange(0, (HEAD_DIM // 16 // 4) * 32 * 4 * 4)  # [2, 32, 4, 4]
-        # if mp_diag: 
-        #     q_scale_nvfp4_ptr = q_scale_nvfp4 + q_scale_nvfp4_base_offset + offs_sm[:, None] * (stride_sqm * 2) + offs_inner_nvfp4[None, :] 
-        #     k_scale_nvfp4_ptr = k_scale_nvfp4 + k_scale_nvfp4_base_offset + offs_sn[:, None] * (stride_skn * 2) + offs_inner_nvfp4[None, :] 
+    # if USE_2D_SCALE_LOAD:
+    offs_inner = tl.arange(0, (HEAD_DIM // VEC_SIZE // 4) * 32 * 4 * 4)
+    q_scale_ptr = q_scale + q_scale_base_offset + offs_sm[:, None] * stride_sqm + offs_inner[None, :] 
+    k_scale_ptr = k_scale + k_scale_base_offset + offs_sn[:, None] * stride_skn + offs_inner[None, :] 
 
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)  # [128, 256] -> p
 
@@ -181,14 +176,9 @@ def block_scaled_batched_attn_kernel(  #
     # if mp_diag: 
     #     scale_q_nvfp4 = tl.load(q_scale_nvfp4_ptr)  # [1, 512]
 
-    if USE_2D_SCALE_LOAD:
-        scale_q = scale_q.reshape(BLOCK_M // WARP_SIZE_M, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)  # 1, 1, 32, 4, 4
-        # if mp_diag: 
-        #     scale_q_nvfp4 = scale_q_nvfp4.reshape(BLOCK_M // WARP_SIZE_M, HEAD_DIM // 16 // 4, 32, 4, 4)  # 1, 2, 32, 4, 4
-
+    # if USE_2D_SCALE_LOAD:
+    scale_q = scale_q.reshape(BLOCK_M // WARP_SIZE_M, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)  # 1, 1, 32, 4, 4
     scale_q = scale_q.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // VEC_SIZE)  # [128, 8]
-    # if mp_diag:    
-    #     scale_q_nvfp4 = scale_q_nvfp4.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // 16)  # [128, 8]
 
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # 初始化为1
     old_m = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
@@ -207,25 +197,13 @@ def block_scaled_batched_attn_kernel(  #
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
-            # k = tl.load(k_ptrs, mask=n_mask[None, :], other=0.0)  # [headdim, 130-128] 
             k = tl.load(k_ptrs, mask=n_mask[:, None], other=0.0)  # [headdim, 130-128] 
             scale_k = tl.load(k_scale_ptr)  # round1: 128*4 --> k: 128*128, round2: 2*4  k: (130-128)*128 = 2*128
-            if dual_scale: scale_k_2 = tl.load(k_scale_2_ptr)
 
-            if USE_2D_SCALE_LOAD:
-                scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)  # 1, 2, 32, 4, 4
+            # if USE_2D_SCALE_LOAD:
+            scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)  # 1, 2, 32, 4, 4
             scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE)  # 128, 128/16 = 128, 8
 
-            # tl.static_print("mp_diag and (start_m != start_n)=", mp_diag and (start_m != start_n))
-            # if mp_diag and (start_m != start_n):
-            #     scale_k_nvfp4 = tl.load(k_scale_nvfp4_ptr)  # [1, 512]
-            #     if USE_2D_SCALE_LOAD:
-            #         scale_k_nvfp4 = scale_k_nvfp4.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // 16 // 4, 32, 4, 4)  # 1, 2, 32, 4, 4
-            #     scale_k_nvfp4 = scale_k_nvfp4.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // 16)  # 128, 8
-            #     q_nvfp4, k_nvfp4 = quant_mxfp8e5_to_nvfp4(q, k, scale_q, scale_k, scale_q_nvfp4, scale_k_nvfp4, BLOCK_M, HEAD_DIM)
-            #     qk = tl.dot_scaled(q_nvfp4, scale_q_nvfp4, "e2m1", k_nvfp4.T, scale_k_nvfp4, "e2m1")# causal - stage1
-            #     k_scale_nvfp4_ptr += (HEAD_DIM // 16 // 4) * (stride_skk*2)
-            # else:
             if MIXED_PREC:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e2m1")
             elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
@@ -237,44 +215,39 @@ def block_scaled_batched_attn_kernel(  #
                 else:
                     qk = tl.dot_scaled(q, scale_q, "e4m3", k.T, scale_k, "e4m3")
             
-            if dual_scale: qk = qk * (scale_q_2 * scale_k_2)
-            # saved_qk = qk
-            
             # 因果注意力第一阶段计算
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
             mask_sum = tl.sum(tl.sum(mask, axis=0))
-            if True:
-            # if mask_sum > 0:   # 好像是对的，但收益不多
-                local_m = tl.max(qk, 1)  # [128]
-                new_m = tl.maximum(old_m, local_m)
-                qk = qk - new_m[:, None]
+            local_m = tl.max(qk, 1)  # [128]
+            new_m = tl.maximum(old_m, local_m)
+            qk = qk - new_m[:, None]
 
-                p = tl.math.exp2(qk)
-                l_ij = tl.sum(p, 1)
-                alpha = tl.math.exp2(old_m - new_m)
-                l_i = l_i * alpha + l_ij
-                acc = acc * alpha[:, None]
-                
-                v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
-                p = p.to(tl.float16)
-                acc += tl.dot(p, v, out_dtype=tl.float16)
-                old_m = new_m
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            alpha = tl.math.exp2(old_m - new_m)
+            l_i = l_i * alpha + l_ij
+            acc = acc * alpha[:, None]
+            
+            v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
+            p = p.to(tl.float16)
+            acc += tl.dot(p, v, out_dtype=tl.float16)
+            old_m = new_m
 
-                k_ptrs += BLOCK_N * stride_kn
-                v_ptrs += BLOCK_N * stride_vn
-                if USE_2D_SCALE_LOAD:
-                    k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
-                        
-                if dual_scale: 
-                    if quant_granularity == 0:
-                        k_scale_2_ptr += 1
-                    elif quant_granularity == 1:
-                        k_scale_2_ptr += HEAD_DIM  # seems right?
-                    elif quant_granularity == 2:
-                        k_scale_2_ptr += BLOCK_N
+            k_ptrs += BLOCK_N * stride_kn
+            v_ptrs += BLOCK_N * stride_vn
+            # if USE_2D_SCALE_LOAD:
+            k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
+                    
+            '''if dual_scale: 
+                if quant_granularity == 0:
+                    k_scale_2_ptr += 1
+                elif quant_granularity == 1:
+                    k_scale_2_ptr += HEAD_DIM  # seems right?
+                elif quant_granularity == 2:
+                    k_scale_2_ptr += BLOCK_N'''
 
         # 因果注意力第二阶段
-        saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
+        # saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
         lo = tl.multiple_of(lo, BLOCK_M)
 
@@ -288,38 +261,25 @@ def block_scaled_batched_attn_kernel(  #
             # k = tl.load(k_ptrs, mask=n_mask[None, :], other=0.0) 
             k = tl.load(k_ptrs, mask=n_mask[:, None], other=0.0)
             scale_k = tl.load(k_scale_ptr)  # [2, 1024]
-            if dual_scale: scale_k_2 = tl.load(k_scale_2_ptr)
+            # if dual_scale: scale_k_2 = tl.load(k_scale_2_ptr)
 
-            if USE_2D_SCALE_LOAD:
-                scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
+            # if USE_2D_SCALE_LOAD:
+            scale_k = scale_k.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // VEC_SIZE // 4, 32, 4, 4)
             scale_k = scale_k.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // VEC_SIZE) 
-
-            # if mp_diag and (start_m == start_n):
-            #     scale_k_nvfp4 = tl.load(k_scale_nvfp4_ptr)  # [1, 512]
-            #     if USE_2D_SCALE_LOAD:  
-            #         scale_k_nvfp4 = scale_k_nvfp4.reshape(BLOCK_N // WARP_SIZE_N, HEAD_DIM // 16 // 4, 32, 4, 4)
-            #     scale_k_nvfp4 = scale_k_nvfp4.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, HEAD_DIM // 16)  # 128, 8
-            #     q_nvfp4, k_nvfp4 = quant_mxfp8e5_to_nvfp4(q, k, scale_q, scale_k, scale_q_nvfp4, scale_k_nvfp4, BLOCK_M, HEAD_DIM)
-            #     qk = tl.dot_scaled(q_nvfp4, scale_q_nvfp4, "e2m1", k_nvfp4.T, scale_k_nvfp4, "e2m1") # causal - stage2
-            #     k_scale_nvfp4_ptr += (HEAD_DIM // 16 // 4) * (stride_skk*2)
-            # else:
+           
             if MIXED_PREC:
                 qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e2m1")
             elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
                 qk = tl.dot_scaled(q, scale_q, "e2m1", k.T, scale_k, "e2m1") 
             else:
-                # qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
-                # qk = tl.dot_scaled(q, scale_q, "e4m3", k.T, scale_k, "e4m3")
                 if qk_dtype == 0:
                     qk = tl.dot_scaled(q, scale_q, "e5m2", k.T, scale_k, "e5m2")
                 else:
                     qk = tl.dot_scaled(q, scale_q, "e4m3", k.T, scale_k, "e4m3")
 
-            if dual_scale:
-                qk = qk * (scale_q_2 * scale_k_2)
+            # if dual_scale: qk = qk * (scale_q_2 * scale_k_2)
 
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
-            # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
             # 因果注意力第二阶段计算
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
@@ -341,16 +301,15 @@ def block_scaled_batched_attn_kernel(  #
 
             k_ptrs += BLOCK_N * stride_kn
             v_ptrs += BLOCK_N * stride_vn
-            if USE_2D_SCALE_LOAD:
-                # if DEBUG_MODE: import pdb; pdb.set_trace()
-                k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
-            if dual_scale:  
+            # if USE_2D_SCALE_LOAD:
+            k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk
+            '''if dual_scale:  
                 if quant_granularity == 0:
                     k_scale_2_ptr += 1
                 elif quant_granularity == 1:
                     k_scale_2_ptr += HEAD_DIM  # seems right?
                 elif quant_granularity == 2:
-                    k_scale_2_ptr += BLOCK_N
+                    k_scale_2_ptr += BLOCK_N'''
     else:
         # saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
 
@@ -515,8 +474,6 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
             q_scale_2_ptr = q_scale_2 + q_scale_2_offset + pid_m
             k_scale_2_ptr = k_scale_2 + k_scale_2_offset + tl.arange(0, HEAD_DIM)  # HEAD_DIM
             scale_q_2 = tl.load(q_scale_2_ptr)
-            # if off_z == 0 and (off_h == 0 and pid_m == 0):
-            #     tl.static_print("k_scale_2_ptr.shape", k_scale_2_ptr.shape)
         elif quant_granularity == 2: # tokenwise - Q, K
             q_scale_2_offset = off_z * stride_sqb_2 + off_h * stride_sqh_2
             k_scale_2_offset = off_z * stride_skb_2 + off_h * stride_skh_2
@@ -615,7 +572,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
 
             v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
             p = p.to(tl.float16)
-            acc += tl.dot(p, v, out_dtype=tl.float16)
+            acc += tl.dot(p, v, out_dtype=tl.float32)
             # acc += tl.dot_scaled(p, None, "fp16", v, None, "fp16")
             old_m = new_m
 
@@ -672,7 +629,8 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
             
             v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
             p = p.to(tl.float16)
-            acc += tl.dot(p, v, out_dtype=tl.float16)
+            # acc += tl.dot(p, v, out_dtype=tl.float16)
+            acc += tl.dot(p, v, out_dtype=tl.float32)
             old_m = new_m
 
             v_ptrs += BLOCK_N * stride_vn
@@ -737,7 +695,8 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
 
             v = tl.load(v_ptrs, mask=n_mask[:, None], other=0.0)
             p = p.to(tl.float16)
-            acc += tl.dot(p, v, out_dtype=tl.float16)
+            # acc += tl.dot(p, v, out_dtype=tl.float16)
+            acc += tl.dot(p, v, out_dtype=tl.float32)
             # acc += tl.dot_scaled(p, None, "fp16", v, None, "fp16")
             old_m = new_m
 
@@ -1215,8 +1174,4 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
 
     acc = acc / l_i[:, None]
     o_ptrs = o_ptr + off_z * stride_ob + off_h * stride_oh + offs_m[:, None] * stride_om + off_v[None, :]  
-    # if save_qk:
-    #     o_ptrs = o_ptr + off_z * stride_ob + off_h * stride_oh + offs_m[:, None] * stride_om + tl.arange(0, 8)[None, :]  
-    #     tl.store(o_ptrs, saved_qk.to(output_dtype), mask=(offs_m[:, None] < qo_len))
-    # else:
     tl.store(o_ptrs, acc.to(output_dtype), mask=(offs_m[:, None] < qo_len))

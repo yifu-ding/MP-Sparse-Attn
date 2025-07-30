@@ -59,7 +59,7 @@ def precision_metric(quant_o, fa2_o, verbose=False, round_num=4):
     if verbose: print(f'Cossim: {sim:.6f}, L1: {l1:.6f}, RMSE:{rmse:.6f}, PSNR:{psnr:.6f}')
     return {"Cossim": sim, "L1": l1, "RMSE": rmse, "PSNR": psnr}
 
-def load_attention_states():
+def load_attention_states(seqlen=None):
     """
     加载保存的注意力状态数据
     """
@@ -74,9 +74,11 @@ def load_attention_states():
     saved_data = torch.load(file_path)
     
     # 提取各个状态
-    query_states = saved_data['query_states'].to(device='cuda', dtype=torch.float16)[:, :, :, :]
-    key_states = saved_data['key_states'].to(device='cuda', dtype=torch.float16)[:, :, :, :]
-    value_states = saved_data['value_states'].to(device='cuda', dtype=torch.float16)[:, :, :, :]
+    if seqlen is None:
+        seqlen = saved_data['query_states'].shape[-2]
+    query_states = saved_data['query_states'].to(device='cuda', dtype=torch.float16)[:, :, :seqlen, :]
+    key_states = saved_data['key_states'].to(device='cuda', dtype=torch.float16)[:, :, :seqlen, :]
+    value_states = saved_data['value_states'].to(device='cuda', dtype=torch.float16)[:, :, :seqlen, :]
     return query_states, key_states, value_states
     
 def seed_all(seed=1029):

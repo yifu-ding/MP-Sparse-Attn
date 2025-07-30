@@ -6,6 +6,7 @@ import time
 # from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim, per_block_int8, forward as forward_triton
 # from flash_attn.flash_attn_triton import flash_attn_func
 import numpy as np
+from helper import print_result_as_md
 from ours.mxfp_attn_func import mxfp_attn_kernel, block_scaled_batched_attn
 # from ours.batched_block_scaled_matmul import test_batched_matmul, initialize_block_scaled_batched_from_tensor
 from ours.quant_funcs import quant_mxfp8, quant_mxfp4, quant_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4
@@ -16,7 +17,7 @@ from ours.mxfp import MXFP4Tensor, MXScaleTensor, MXFP8Tensor
 import triton
 import triton.language as tl
 from tests.tile_size_ablation import load_attention_states
-from tests.test_time_breakdown import test_time_breakdown
+from tests.time_profiler import time_profiler
 
 iter_times = 10
 
@@ -60,22 +61,30 @@ def test_kernel_fusion_benchmark():
 
     batch_size = 1
     num_heads = 24
-    qo_len = 4096
-    kv_len = 4096
+    # qo_len = 11110
+    # kv_len = 11110
     head_dim = 128
     is_causal = True
-    block_scale_type = "mxfp4"
+    block_scale_type = "mixed"
     # block_scale_type = "nvfp4"
     smooth_k = True
     dual_scale = False
-    quant_granularity = "tokenwise"
+    quant_granularity = "blockwise"
+    qk_dtype = "e4m3"
 
-    q = torch.randn(batch_size, num_heads, qo_len, head_dim,
-                    device='cuda', dtype=torch.float16)
-    k = torch.randn(batch_size, num_heads, kv_len, head_dim, 
-                    device='cuda', dtype=torch.float16)
-    v = torch.randn(batch_size, num_heads, kv_len, head_dim,
-                    device='cuda', dtype=torch.float16)
+    query_states, key_states, value_states = load_attention_states(2048*4)
+    q = query_states
+    k = key_states
+    v = value_states
+
+    qo_len = q.shape[2]
+    kv_len = k.shape[2]
+    # q = torch.randn(batch_size, num_heads, qo_len, head_dim,
+    #                 device='cuda', dtype=torch.float16)
+    # k = torch.randn(batch_size, num_heads, kv_len, head_dim, 
+    #                 device='cuda', dtype=torch.float16)
+    # v = torch.randn(batch_size, num_heads, kv_len, head_dim,
+    #                 device='cuda', dtype=torch.float16)
 
     # s_q = torch.randn(batch_size, num_heads, qo_len, head_dim//16,
     #                 device='cuda', dtype=torch.float16)
@@ -92,7 +101,7 @@ def test_kernel_fusion_benchmark():
     # )
     BLKQ = 128
     BLKK = 128
-    pack_along_lastdim = True
+    fuse_pack = True
     sm_scale = (head_dim)**(-0.5)* 1.44269504
 
     # not fused at all
@@ -122,6 +131,7 @@ def test_kernel_fusion_benchmark():
         x_abs = x_abs / shared_scale_broadcast
         x_quant = torch.clamp(x_abs, -6, 6)
         x_fp4 = MXFP4Tensor(x_quant, device=x.device)
+        x_fp4 = x_fp4.to_packed_tensor(dim=len(x_fp4.data.shape) - 1)
         quant_scale = MXScaleTensor(quant_scale, device=x.device)
         return x_fp4, quant_scale
 
@@ -152,6 +162,8 @@ def test_kernel_fusion_benchmark():
         input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
         output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
         scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
+
+        
 
         x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
         x = x.to(tl.float32)
@@ -243,7 +255,7 @@ def test_kernel_fusion_benchmark():
                         stride_sz_2, stride_sh_2, stride_sn_2,
                         sm_scale,
                         C: tl.constexpr, BLK: tl.constexpr, candidates_ptr=None, 
-                        pack_along_lastdim = False,
+                        fuse_pack = False,
                         dual_scale_type = 0,
                         dual_scale = False):   # C: head_dim, BLK: BLKQ 128 or BLKK 64
         off_blk = tl.program_id(0)
@@ -315,7 +327,7 @@ def test_kernel_fusion_benchmark():
         # 5. pack and store x_quant
         # Pack two e2m1 elements into a single uint8 along the specified dimension.
         # x_uint8 = tl.reshape(x_quant, x.shape)
-        if pack_along_lastdim:
+        if fuse_pack:
             x_quant_reshaped = tl.reshape(x_quant, (BLK, (C + 1) // 2, 2))
             low, high = tl.split(x_quant_reshaped)
             x_uint8_packed = (high << 4) | low
@@ -340,13 +352,13 @@ def test_kernel_fusion_benchmark():
         tl.store(scale_ptrs, shared_scale.to(tl.float32), mask=offs_n[:, None] < L)
 
     def quant_nvfp4_not_fuse_scalar(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VEC_SIZE=16, \
-        pack_along_lastdim=False, dual_scale=False, quant_granularity="blockwise"):
+        fuse_pack=False, dual_scale=False, quant_granularity="blockwise"):
 
         if tensor_layout == "HND":
             b, h_qo, qo_len, head_dim = q.shape
             _, h_kv, kv_len, _ = k.shape
 
-            if pack_along_lastdim:
+            if fuse_pack:
                 assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
                 assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
                 q_fp4 = torch.empty((b, h_qo, qo_len, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -364,7 +376,7 @@ def test_kernel_fusion_benchmark():
             b, qo_len, h_qo, head_dim = q.shape
             _, kv_len, h_kv, _ = k.shape
 
-            if pack_along_lastdim:
+            if fuse_pack:
                 assert BLKQ % 2 == 0, "BLKQ must be even for packing along lastdim"
                 assert BLKK % 2 == 0, "BLKK must be even for packing along lastdim"
                 q_fp4 = torch.empty((b, qo_len, h_qo, (head_dim + 1) // 2), dtype=torch.uint8, device=q.device)
@@ -418,7 +430,7 @@ def test_kernel_fusion_benchmark():
             q_scale_2.stride(0), q_scale_2.stride(1), q_scale_2.stride(2),
             sm_scale=(sm_scale * 1.44269504),
             C=head_dim, BLK=BLKQ,
-            pack_along_lastdim=pack_along_lastdim,
+            fuse_pack=fuse_pack,
             dual_scale_type=dual_scale_type_q,
             dual_scale=dual_scale, 
         )
@@ -432,7 +444,7 @@ def test_kernel_fusion_benchmark():
             k_scale_2.stride(0), k_scale_2.stride(1), k_scale_2.stride(2),
             sm_scale=1.0,
             C=head_dim, BLK=BLKK,   
-            pack_along_lastdim=pack_along_lastdim,
+            fuse_pack=fuse_pack,
             dual_scale_type=dual_scale_type_k,
             dual_scale=dual_scale, 
         )
@@ -450,7 +462,7 @@ def test_kernel_fusion_benchmark():
         k_scale = MXScaleTensor(k_scale, device=k_scale.device)
 
         q_fp4, q_scale, k_fp4, k_scale, q_scale_2, k_scale_2 = quant_nvfp4_not_fuse_scalar(q, k, BLKQ=BLKQ, BLKK=BLKK, \
-            pack_along_lastdim=False, dual_scale=True, quant_granularity=quant_granularity)
+            fuse_pack=False, dual_scale=True, quant_granularity=quant_granularity)
         q_fp4 = MXFP4Tensor(data=q_fp4, dtype=torch.uint8)
         q_fp4 = q_fp4.to_packed_tensor(dim=len(q_fp4.data.shape) - 1)
         k_fp4 = MXFP4Tensor(data=k_fp4, dtype=torch.uint8)
@@ -468,7 +480,7 @@ def test_kernel_fusion_benchmark():
         k_scale = MXScaleTensor(k_scale, device=k_scale.device)
 
         q_fp4, q_scale, k_fp4, k_scale, q_scale_2, k_scale_2 = quant_nvfp4_not_fuse_scalar(q, k, BLKQ=BLKQ, BLKK=BLKK, \
-            pack_along_lastdim=True, dual_scale=True, quant_granularity=quant_granularity)
+            fuse_pack=True, dual_scale=dual_scale, quant_granularity=quant_granularity)
 
         q_scale = MXScaleTensor(q_scale, device=q_scale.device)
         k_scale = MXScaleTensor(k_scale, device=k_scale.device)
@@ -477,15 +489,16 @@ def test_kernel_fusion_benchmark():
 
 
     def fuse_quant_pack_scale_cvt_not_fuse_mp_quant(q, k):
-        q_fp8, q_scale, k_fp8, k_scale, q_scale_2, k_scale_2 = quant_mxfp8e5(q, k, BLKQ=BLKQ, BLKK=BLKK)
+        q_fp8, q_scale, k_fp8, k_scale, q_scale_2, k_scale_2 = quant_mxfp8(q, k, BLKQ=BLKQ, BLKK=BLKK, \
+            qk_dtype=qk_dtype, dual_scale=dual_scale, quant_granularity=quant_granularity)
         torch.cuda.synchronize()
         q_fp4, q_scale, k_fp4, k_scale, q_scale_2, k_scale_2 = quant_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, \
-            pack_along_lastdim=True, dual_scale=True, quant_granularity=quant_granularity)
-        
+            fuse_pack=True, dual_scale=dual_scale, quant_granularity=quant_granularity)
+        torch.cuda.synchronize()
 
     def fuse_all(q, k):
-        quant_mxfp8e5_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, pack_along_lastdim=True, v_quant=False, v=None, \
-            dual_scale=False, quant_granularity=quant_granularity)
+        quant_mxfp8_nvfp4(q, k, BLKQ=BLKQ, BLKK=BLKK, fuse_pack=True, v_quant=False, v=None, \
+            dual_scale=dual_scale, quant_granularity=quant_granularity, qk_dtype=qk_dtype)
 
 
     dict_func = {
@@ -504,12 +517,15 @@ def test_kernel_fusion_benchmark():
         "fuse_all": [],
     }
 
+    # time_profiler(fuse_quant_pack_scale_cvt_not_fuse_mp_quant, q, k)
+    # exit()
+
     for func_name, func in dict_func.items():
         print(f"testing {func_name}...")
         out, time_total, ops = measure_time(
             func, q, k
         )
-        results[func_name] = [out, time_total, ops]
+        results[func_name] = {'Avg Time (us)': time_total*1000, 'OPS': ops}
 
     print("testing torch.nn.functional.scaled_dot_product_attention...")
     def test_sdpa(q, k, v, is_causal=False):
@@ -525,12 +541,14 @@ def test_kernel_fusion_benchmark():
     )
 
 
-    # 打印结果
-    print(f"{'Function':<45} | {'Time (us)':>10} | {'ops':>10}")
-    print("-" * 70)
+    # # 打印结果
+    # print(f"{'Function':<45} | {'Time (us)':>10} | {'ops':>10}")
+    # print("-" * 70)
 
-    for func_name, (out, avg_time, ops) in results.items():
-        print(f"{func_name:<45} | {avg_time * 1000 :10.3f} | {ops:10.3f}")
+    # for func_name, (out, avg_time, ops) in results.items():
+    #     print(f"{func_name:<45} | {avg_time * 1000 :10.3f} | {ops:10.3f}")
+
+    print_result_as_md(results)
 
 
 def test_attn_time_breakdown():
@@ -547,8 +565,8 @@ def test_attn_time_breakdown():
     quant_granularity = "tensorwise"  # tokenwise, blockwise, tensorwise
     tile_size = 1
     sink_size = 1
-    # q_pack_along_lastdim = False
-    # k_pack_along_lastdim = False
+    # q_fuse_pack = False
+    # k_fuse_pack = False
 
     print(f"block_scale_type: {block_scale_type}, qk_dtype: {qk_dtype}, \
         dual_scale: {dual_scale}, quant_granularity: {quant_granularity}")
@@ -577,9 +595,9 @@ def test_attn_time_breakdown():
         "sink_tile": sink_size,
         "qk_dtype": qk_dtype,
     }
-    test_time_breakdown(mxfp_attn_kernel, q, k, v, **kwargs)
+    time_profiler(mxfp_attn_kernel, q, k, v, **kwargs)
 
 
 if __name__ == "__main__":
-    # test_kernel_fusion_benchmark()
-    test_attn_time_breakdown()
+    test_kernel_fusion_benchmark()
+    # test_attn_time_breakdown()

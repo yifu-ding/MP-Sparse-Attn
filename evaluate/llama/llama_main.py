@@ -85,8 +85,8 @@ def main():
     parser.add_argument('--dual_scale', action='store_true', help="dual scale")
     parser.add_argument('--quant_granularity', type=str, default='tokenwise', help="quant granularity")
 
-    parser.add_argument('--pre_quant', type=bool, default=False, help="pre quant")
-    parser.add_argument('--fuse_mp_quant', type=bool, default=False, help="fuse mp quant")
+    parser.add_argument('--pre_quant', action='store_true', help="pre quant")
+    parser.add_argument('--fuse_mp_quant', action='store_true', help="fuse mp quant")
     parser.add_argument('--diag_tile', type=int, default=1, help="diag tile")
     parser.add_argument('--sink_tile', type=int, default=1, help="sink tile")
     parser.add_argument('--qk_dtype', type=str, default='e5m2', help="qk dtype")
@@ -392,6 +392,8 @@ def main():
                 print(f"{dataset_name}: {score:.2f}")
                 if args.use_wandb:
                     wandb.log({f"{dataset_name}_score": score})
+
+        print_result_as_md(scores)
         
 if __name__ == "__main__":
     main()

@@ -19,5 +19,7 @@
     "mistral-7b-instruct-v0.2": 31500,
     "llama-3.2-3b-instruct": 128000,
     "llama-3.1-8b-instruct": 128000,
-    "llama3-3-70b": 128000
+    "llama3-3-70b": 128000,
+    "qwen2.5-14b-instruct": 128000,
+    "qwen2.5-7b-instruct": 32768
 }

@@ -1,45 +1,14 @@
 # export PYTHONPATH=.
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 export WANDB_API_KEY='0472ad3924bc84e9db9a77d63ac636eb0e13a49d'
-# wandb offline
 
-# ours
-# python evaluate/llama/llama_main.py \
-#     --model Llama-3.2-3B-Instruct \
-#     --device cuda \
-#     --output_path ./results \
-#     --test_speedup \
-#     --test_accuracy \
-#     --skip_thresh 0.5 \
-#     --kernel_name online_routing \
-#     --use_wandb \
-    # --num_fewshots 50 \
-    # --test_dataset_name dureader \
-
-# sparge attn triton 
-# python evaluate/llama/llama_main.py \
-#     --model Llama-3.2-3B-Instruct \
-#     --device cuda \
-#     --output_path ./results \
-#     --model_out_path  ./evaluate/models_dict/llama-3.2-3b-instruct_l1_0.08_pv_l1_0.09-20shots.pt \
-#     --l1 0.08 \
-#     --pv_l1 0.09 \
-#     --test_speedup \
-#     --test_accuracy \
-#     --kernel_name spargeattn_triton \
-#     --use_wandb \
-#     # --test_dataset_name dureader \
-#     # --num_fewshots 50 \
-
-# mxfp attn
 # MODEL_NAME=llama3-3-70b
-MODEL_NAME=llama-3.2-3b-instruct
+# MODEL_NAME=llama-3.2-3b-instruct
+MODEL_NAME=qwen2.5-7b-instruct
 # MODEL_NAME=llama-3.1-8b-instruct
 KERNEL_NAME=mxfp_attn
 BITWIDTH=mixed
-PRE_QUANT=True
-FUSE_MP_QUANT=True
-DATASET_NAME=all  # 2wikimqa
+DATASET_NAME=narrativeqa  # 2wikimqa
 DIAG_TILE=1
 SINK_TILE=1
 QUANT_GRANULARITY=tokenwise
@@ -60,14 +29,15 @@ python evaluate/llama/llama_main.py \
     --mxfp_bw $BITWIDTH \
     --kernel_name $KERNEL_NAME \
     --smooth_k \
-    --pre_quant $PRE_QUANT \
-    --fuse_mp_quant $FUSE_MP_QUANT \
+    --pre_quant \
+    --fuse_mp_quant \
     --diag_tile $DIAG_TILE \
     --sink_tile $SINK_TILE \
     --quant_granularity $QUANT_GRANULARITY \
     --qk_dtype $QK_DTYPE \
     --test_speedup \
+    --dual_scale \
+    --num_fewshots 1 \
     2>&1 | tee $OUTPUT_PATH/all_tasks.log
-    # --dual_scale \
 
-sh scripts/send_email.sh $OUTPUT_PATH
+# sh scripts/send_email.sh $OUTPUT_PATH

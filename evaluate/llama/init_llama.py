@@ -49,7 +49,7 @@ def init_llama_model(model_path="", device="cuda"):
     model = load_checkpoint_and_dispatch(
         model, model_path,
         device_map="auto",  # 或自定义 dict: { "transformer.h.0": 0, ..., "lm_head": 1 }
-        no_split_module_classes=["LlamaDecoderLayer"]
+        no_split_module_classes=["LlamaDecoderLayer", "Qwen2DecoderLayer"]
     )
 
     model = model.bfloat16()

@@ -10,12 +10,42 @@ import triton
 import triton.language as tl
 import triton.profiler as proton
 
-from ours.mxfp import MXFP4Tensor, MXScaleTensor
+from ours.mxfp import MXFP4Tensor, MXScaleTensor, MXFP8Tensor
 # from ours.quant_kernels import quant_fpxint8, quant_mxfp8e5, quant_mxfp4, quant_nvfp4, get_nvfp4_scale, quant_mxfp8e5_nvfp4, quant_mxfp8e4_nvfp4, quant_mxfp8e4
 from ours.quant_funcs import quant_mxfp8, quant_mxfp4, quant_nvfp4, get_nvfp4_scale, quant_mxfp8_nvfp4, quant_mxfp8_nvfp4, quant_mxfp8, quant_nvfp4_per_channel
 import os
-from ours.mxfp_attn_kernel import block_scaled_batched_attn_kernel, block_scaled_batched_attn_kernel_mp_diag_pre_quant, block_scaled_batched_attn_kernel_mp_sink_pre_quant
+from ours.mxfp_attn_kernel_opt import block_scaled_batched_attn_kernel, block_scaled_batched_attn_kernel_mp_diag_pre_quant, block_scaled_batched_attn_kernel_mp_sink_pre_quant
 
+# not fused at all
+def not_fused_mxfp8_quant(x, sm_scale, batch_size, num_heads, qo_len, head_dim):
+    x = x.reshape(batch_size, num_heads, qo_len, head_dim//32, 32)
+    x *= sm_scale
+    emax_elem = 15
+    x_abs_max = torch.max(torch.abs(x), dim=-1).values  # [1, 24, 4096, 4]
+    shared_exp = torch.floor(torch.log2(x_abs_max)) - emax_elem
+    shared_scale = torch.exp2(shared_exp)
+    # import pdb; pdb.set_trace()
+    shared_scale_broadcast = shared_scale.reshape(batch_size, num_heads, qo_len, head_dim//32, 1).repeat(1, 1, 1, 1, 32)
+    x = x / shared_scale_broadcast
+    x_quant = torch.clamp(x, -57344, 57344)
+    x_fp8 = MXFP8Tensor(x_quant, device=x.device)
+    shared_scale = MXScaleTensor(shared_scale, device=x.device)
+    return x_fp8.data.reshape(batch_size, num_heads, qo_len, head_dim), shared_scale.data
+
+def not_fused_nvfp4_quant(x, sm_scale, batch_size, num_heads, qo_len, head_dim):
+    x = x.reshape(batch_size, num_heads, qo_len, head_dim//16, 16)
+    x *= sm_scale
+    x_abs = torch.abs(x)
+    quant_scale = torch.max(x_abs, dim=-1, keepdim=True).values / (448*6)
+    x_abs = x_abs / quant_scale
+    shared_scale = torch.max(x_abs, dim=-1, keepdim=True).values / 6.0
+    shared_scale_broadcast = shared_scale.reshape(batch_size, num_heads, qo_len, head_dim//16, 1).repeat(1, 1, 1, 1, 16)
+    x_abs = x_abs / shared_scale_broadcast
+    x_quant = torch.clamp(x_abs, -6, 6)
+    x_fp4 = MXFP4Tensor(x_quant, device=x.device)
+    x_fp4 = x_fp4.to_packed_tensor(dim=len(x_fp4.data.shape) - 1)
+    shared_scale = MXScaleTensor(shared_scale.reshape(batch_size, num_heads, qo_len, head_dim//16), device=x.device)
+    return x_fp4.reshape(batch_size, num_heads, qo_len, head_dim//2), shared_scale.data
 
 @torch.compiler.disable
 def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
@@ -33,14 +63,14 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
     if 'diag' in block_scale_type and (not pre_quant):
         assert fuse_mp_quant == False, "fuse_mp_quant must be False when using oneline quant"
 
-    dtype = q.dtype
-    if dtype == torch.float32 or dtype == torch.float16:
-        q, k, v = q.contiguous().to(torch.float16), k.contiguous().to(torch.float16), v.contiguous().to(torch.float16)
-    else:
-        q, k, v = q.contiguous().to(torch.bfloat16), k.contiguous().to(torch.bfloat16), v.contiguous().to(torch.float16)
+    # dtype = q.dtype
+    # if dtype == torch.float32 or dtype == torch.float16:
+    q, k, v = q.contiguous().to(torch.float16), k.contiguous().to(torch.float16), v.contiguous().to(torch.float16)
+    # else:
+    #     q, k, v = q.contiguous().to(torch.bfloat16), k.contiguous().to(torch.bfloat16), v.contiguous().to(torch.float16)
+    # q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
 
-    if smooth_k:
-        k = k - k.mean(dim=-2, keepdim=True)
+    if smooth_k:  k = k - k.mean(dim=-2, keepdim=True)
 
     B, H, M, K = q.shape 
     N = k.shape[2]
@@ -65,8 +95,23 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
     if block_scale_type == "mxfp4":
         q_quant, q_scale, k_quant, k_scale, q_scale_2, k_scale_2 = quant_mxfp4(q, k, **kwargs)
 
-    elif block_scale_type == "nvfp4":
+    elif block_scale_type == "nvfp4" and fuse_mp_quant:
         q_quant, q_scale, k_quant, k_scale, q_scale_2, k_scale_2 = quant_nvfp4(q, k, **kwargs)
+
+    elif block_scale_type == "mixed" and not fuse_mp_quant:
+        sm_scale = (K)**(-0.5)* 1.44269504
+
+        q_scale_2 = torch.abs(torch.max(q, dim=-1, keepdim=True).values) / (2**11)
+        k_scale_2 = torch.abs(torch.max(k, dim=-1, keepdim=True).values) / (2**11)
+
+        q_fp8, q_scale = not_fused_mxfp8_quant(q, sm_scale, B, H, M, K)
+        k_fp8, k_scale = not_fused_mxfp8_quant(k, 1, B, H, N, K)
+        q_fp4, q_scale_fp4 = not_fused_nvfp4_quant(q, sm_scale, B, H, M, K)
+        k_fp4, k_scale_fp4 = not_fused_nvfp4_quant(k, 1, B, H, N, K)
+
+        q_quant = q_fp8
+        k_quant = k_fp8
+
 
     elif block_scale_type == "mxfp8":
         q_quant, q_scale, k_quant, k_scale, q_scale_2, k_scale_2 = quant_mxfp8(q, k, **kwargs)
@@ -112,7 +157,7 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
         "VEC_SIZE": VEC_SIZE,
     }
-
+    # import pdb; pdb.set_trace()
     output = block_scaled_batched_attn(
             q_quant, q_scale, k_quant, k_scale, \
             q_fp4, q_scale_fp4, k_fp4, k_scale_fp4, \
@@ -197,6 +242,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
     grid = (triton.cdiv(qo_len, BLOCK_M), H, B)
 
     num_kv_groups = h_qo // h_kv
+
     if diag_tile > 0:
         block_scaled_batched_attn_kernel_mp_diag_pre_quant[grid](
             a_desc, a_scale, a_scale_2, a_nvfp4, a_scale_nvfp4,

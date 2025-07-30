@@ -103,37 +103,38 @@ def quant_mxfp8(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", qu
     q_scale = torch.empty((b, h_qo, qo_len, head_dim // 32), device=q.device, dtype=torch.uint8)
     k_scale = torch.empty((b, h_kv, kv_len, head_dim // 32), device=q.device, dtype=torch.uint8)
 
-    # q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
-    # k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
+    q_scale_2 = torch.empty((b, h_qo, 1), device=q.device, dtype=torch.float32)
+    k_scale_2 = torch.empty((b, h_kv, 1), device=q.device, dtype=torch.float32)
 
      # dual scale: channelwise, blockwise, tokenwise
     dual_scale_type_q = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
     dual_scale_type_k = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
-    if quant_granularity == "blockwise":
-        dual_scale_type_q = 0
-        dual_scale_type_k = 0
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
-    elif quant_granularity == "channelwise": # channelwise in blockwise
-        dual_scale_type_q = 0
-        dual_scale_type_k = 1
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
-    elif quant_granularity == "tokenwise":
-        dual_scale_type_q = 2
-        dual_scale_type_k = 2
-        q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
-    elif quant_granularity == "tensorwise":
-        dual_scale_type_q = 3
-        dual_scale_type_k = 3
-        # import pdb; pdb.set_trace()
-        # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
-        q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values.to(torch.float32)) / (2**3)
-        # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values.to(torch.float32)) / (2**3)
-    else:
-        raise ValueError(f"Unknown quant granularity: {quant_granularity}")
+    if dual_scale:
+        if quant_granularity == "blockwise":
+            dual_scale_type_q = 0
+            dual_scale_type_k = 0
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
+        elif quant_granularity == "channelwise": # channelwise in blockwise
+            dual_scale_type_q = 0
+            dual_scale_type_k = 1
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
+        elif quant_granularity == "tokenwise":
+            dual_scale_type_q = 2
+            dual_scale_type_k = 2
+            q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
+        elif quant_granularity == "tensorwise":
+            dual_scale_type_q = 3
+            dual_scale_type_k = 3
+            # import pdb; pdb.set_trace()
+            # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
+            q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values.to(torch.float32)) / (2**3)
+            # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values.to(torch.float32)) / (2**3)
+        else:
+            raise ValueError(f"Unknown quant granularity: {quant_granularity}")
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
@@ -212,30 +213,35 @@ def quant_mxfp8_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HN
     # dual scale: channelwise, blockwise, tokenwise
     dual_scale_type_q = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
     dual_scale_type_k = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
-    if quant_granularity == "blockwise":
-        dual_scale_type_q = 0
-        dual_scale_type_k = 0
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
-    elif quant_granularity == "channelwise": # channelwise in blockwise
-        dual_scale_type_q = 0
-        dual_scale_type_k = 1
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
-    elif quant_granularity == "tokenwise":
-        dual_scale_type_q = 2
-        dual_scale_type_k = 2
-        q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
-    elif quant_granularity == "tensorwise":
-        dual_scale_type_q = 3
-        dual_scale_type_k = 3
-        # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
-        q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values) / (2**11)
-        # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values) / (2**11)
-    else:
-        raise ValueError(f"Unknown quant granularity: {quant_granularity}")
+
+    q_scale_2 = torch.empty((b, h_qo, 1), device=q.device, dtype=torch.float32)
+    k_scale_2 = torch.empty((b, h_kv, 1), device=q.device, dtype=torch.float32)
+
+    if dual_scale:
+        if quant_granularity == "blockwise":
+            dual_scale_type_q = 0
+            dual_scale_type_k = 0
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
+        elif quant_granularity == "channelwise": # channelwise in blockwise
+            dual_scale_type_q = 0
+            dual_scale_type_k = 1
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
+        elif quant_granularity == "tokenwise":
+            dual_scale_type_q = 2
+            dual_scale_type_k = 2
+            q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
+        elif quant_granularity == "tensorwise":
+            dual_scale_type_q = 3
+            dual_scale_type_k = 3
+            # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
+            q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values) / (2**11)
+            # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values) / (2**11)
+        else:
+            raise ValueError(f"Unknown quant granularity: {quant_granularity}")
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
@@ -333,30 +339,35 @@ def quant_mxfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
     # dual scale: channelwise, blockwise, tokenwise
     dual_scale_type_q = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
     dual_scale_type_k = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
-    if quant_granularity == "blockwise":
-        dual_scale_type_q = 0
-        dual_scale_type_k = 0
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
-    elif quant_granularity == "channelwise": # channelwise in blockwise
-        dual_scale_type_q = 0
-        dual_scale_type_k = 1
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
-    elif quant_granularity == "tokenwise":
-        dual_scale_type_q = 2
-        dual_scale_type_k = 2
-        q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
-    elif quant_granularity == "tensorwise":
-        dual_scale_type_q = 3
-        dual_scale_type_k = 3
-        # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
-        q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values) / (2**3)
-        # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values) / (2**3)
-    else:
-        raise ValueError(f"Unknown quant granularity: {quant_granularity}")
+
+    q_scale_2 = torch.empty((b, h_qo, 1), device=q.device, dtype=torch.float32)
+    k_scale_2 = torch.empty((b, h_kv, 1), device=q.device, dtype=torch.float32)
+
+    if dual_scale:
+        if quant_granularity == "blockwise":
+            dual_scale_type_q = 0
+            dual_scale_type_k = 0
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
+        elif quant_granularity == "channelwise": # channelwise in blockwise
+            dual_scale_type_q = 0
+            dual_scale_type_k = 1
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
+        elif quant_granularity == "tokenwise":
+            dual_scale_type_q = 2
+            dual_scale_type_k = 2
+            q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
+        elif quant_granularity == "tensorwise":
+            dual_scale_type_q = 3
+            dual_scale_type_k = 3
+            # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
+            q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values) / (2**3)
+            # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values) / (2**3)
+        else:
+            raise ValueError(f"Unknown quant granularity: {quant_granularity}")
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5
@@ -565,34 +576,38 @@ def quant_nvfp4(q, k, BLKQ=128, BLKK=128, sm_scale=None, tensor_layout="HND", VE
 
     q_scale = torch.empty((b, h_qo, qo_len, head_dim // VEC_SIZE), device=q.device, dtype=torch.float8_e4m3fn)
     k_scale = torch.empty((b, h_kv, kv_len, head_dim // VEC_SIZE), device=q.device, dtype=torch.float8_e4m3fn)
+    
+    q_scale_2 = torch.empty((b, h_qo, 1), device=q.device, dtype=torch.float32)
+    k_scale_2 = torch.empty((b, h_kv, 1), device=q.device, dtype=torch.float32)
 
     # dual scale: channelwise, blockwise, tokenwise
     dual_scale_type_q = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
     dual_scale_type_k = 0 # 0: blockwise, 1: channelwise, 2: tokenwise
-    if quant_granularity == "blockwise":
-        dual_scale_type_q = 0
-        dual_scale_type_k = 0
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
-    elif quant_granularity == "channelwise": # channelwise in blockwise
-        dual_scale_type_q = 0
-        dual_scale_type_k = 1
-        q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
-    elif quant_granularity == "tokenwise":
-        dual_scale_type_q = 2
-        dual_scale_type_k = 2
-        q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
-    elif quant_granularity == "tensorwise":
-        dual_scale_type_q = 3
-        dual_scale_type_k = 3
-        # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
-        q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True))
-        # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
-        k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True))
-    else:
-        raise ValueError(f"Unknown quant granularity: {quant_granularity}")
+    if dual_scale:
+        if quant_granularity == "blockwise":
+            dual_scale_type_q = 0
+            dual_scale_type_k = 0
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, 1), device=q.device, dtype=torch.float32) 
+        elif quant_granularity == "channelwise": # channelwise in blockwise
+            dual_scale_type_q = 0
+            dual_scale_type_k = 1
+            q_scale_2 = torch.empty((b, h_qo, (qo_len + BLKQ - 1) // BLKQ, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, (kv_len + BLKK - 1) // BLKK, head_dim), device=q.device, dtype=torch.float32)    
+        elif quant_granularity == "tokenwise":
+            dual_scale_type_q = 2
+            dual_scale_type_k = 2
+            q_scale_2 = torch.empty((b, h_qo, qo_len, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.empty((b, h_kv, kv_len, 1), device=q.device, dtype=torch.float32)
+        elif quant_granularity == "tensorwise":
+            dual_scale_type_q = 3
+            dual_scale_type_k = 3
+            # q_scale_2 = torch.empty((b, h_qo, 1, 1), device=q.device, dtype=torch.float32)
+            q_scale_2 = torch.abs(torch.max(q.reshape(b, h_qo, -1), dim=-1, keepdim=True).values)
+            # k_scale_2 = torch.empty((b, h_kv, 1, 1), device=q.device, dtype=torch.float32)
+            k_scale_2 = torch.abs(torch.max(k.reshape(b, h_kv, -1), dim=-1, keepdim=True).values)
+        else:
+            raise ValueError(f"Unknown quant granularity: {quant_granularity}")
 
     if sm_scale is None:
         sm_scale = head_dim**-0.5

@@ -176,7 +176,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     if dual_scale:
         if dual_scale_type == 0:
             scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q + off_blk  # per block scale
-            scale = tl.max(tl.abs(x)) / (2**11) # mxfp4 range: [-6, 6]
+            scale = tl.max(tl.abs(x)) / (2**7) # mxfp4 range: [-6, 6]
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale)
@@ -188,7 +188,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
             tl.store(scale_ptrs_2, scale)
         elif dual_scale_type == 2:
             scale_ptrs_2 = Scale_q + off_b * stride_sz_q + off_h * stride_sh_q + offs_n[:, None] # per token scale
-            scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / (2**11) # mxfp4 range: [-6, 6]
+            scale = tl.max(tl.abs(x), axis=1, keep_dims=True) / (2**7) # mxfp4 range: [-6, 6]
             scale += 0.0000001
             x = x / scale
             tl.store(scale_ptrs_2, scale, mask=offs_n[:, None] < L)
@@ -249,14 +249,14 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
 
     tl.store(scale_ptrs, shared_scale.to(tl.float8e4nv), mask=offs_n[:, None] < L)
 
-    ########################################################################
+    # ########################################################################
     offs_n_32 = tl.arange(0, C//32)
     scale_ptrs = Scale_fp8 + off_b * stride_sz + off_h * stride_sh + offs_n[:, None] * stride_sn + offs_n_32[None, :]
 
     x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]  --> [BLKQ, 4, 32]
-    # abs_max = tl.reshape(abs_max, (BLK, C//32, 2)) 
-    # abs_max = tl.max(tl.abs(abs_max), axis=-1)  # abs_max shape: [BLK, C//32] --> [BLKQ, 4]
-    abs_max = tl.max(tl.abs(x_reshaped), axis=-1) 
+    abs_max = tl.reshape(abs_max, (BLK, C//32, 2)) 
+    abs_max = tl.max(tl.abs(abs_max), axis=-1)  # abs_max shape: [BLK, C//32] --> [BLKQ, 4]
+    # abs_max = tl.max(tl.abs(x_reshaped), axis=-1) 
 
     # 对于float8，emax_elem = 7 for e4m3, 15 for e5m2
     emax_elem = 7 if qk_dtype == 1 else 15

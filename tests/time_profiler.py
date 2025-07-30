@@ -13,7 +13,7 @@ from torch.autograd import profiler as autograd_profiler
 # q = torch.randn(1, 24, 4096, 128, device='cuda')
 # k = torch.randn(1, 24, 4096, 128, device='cuda')
 
-def test_time_breakdown(func, *args, **kwargs):
+def time_profiler(func, *args, **kwargs):
 
     for _ in range(5):  # warmup
         func(*args, **kwargs)

@@ -162,13 +162,13 @@ class MXFP4Tensor:
         candidate_E = torch.tensor(candidate_E, dtype=torch.uint8, device=self.device)
         candidate_M = torch.tensor(candidate_M, dtype=torch.uint8, device=self.device)
 
-        abs_values_flat = abs_values.view(-1)
+        abs_values_flat = abs_values.reshape(-1)
         N = abs_values_flat.shape[0]
         abs_values_expanded = abs_values_flat.unsqueeze(1)
 
         # Clamp invalid values to the max e2m1 representable value
         max_candidate_value = candidates.max().item()
-        abs_values_flat[is_invalid.view(-1)] = max_candidate_value
+        abs_values_flat[is_invalid.reshape(-1)] = max_candidate_value
 
         # Compute distance between all abs_values and candidate e2m1 values
         errors = torch.abs(abs_values_expanded - candidates.unsqueeze(0))
