@@ -16,20 +16,7 @@ limitations under the License.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import os
-from tqdm import tqdm
-import numpy as np
-# from spas_sage_attn.utils import precision_metric
-# from spas_sage_attn import spas_sage_attn_meansim_cuda, spas_sage2_attn_meansim_cuda
-# from spas_sage_attn.triton_kernel_example import spas_sage_attn_meansim
-import warnings
-# from einops import rearrange
-from ours.online_routing import online_routing_attn
 from ours.mxfp_attn_func import mxfp_attn_kernel
-from scripts.debug3 import mxfp_attn_debug
-
-
 # 
 from tools.gpu_process import GPUProcessPoolExecutor
 executor = GPUProcessPoolExecutor()
@@ -56,12 +43,8 @@ class MXFPAttention(nn.Module):
         self.qk_dtype = qk_dtype
   
     def kernel_selection(self, kernel_name=None):
-        if kernel_name == "online_routing":
-            return online_routing_attn
-        elif kernel_name == "mxfp_attn":
+        if kernel_name == "mxfp_attn":
             return mxfp_attn_kernel
-        elif kernel_name == "mxfp_attn_debug":
-            return mxfp_attn_debug
         elif kernel_name == "native":
             return torch.nn.functional.scaled_dot_product_attention
         else:
@@ -85,16 +68,7 @@ class MXFPAttention(nn.Module):
         assert len(q.shape) == 4, "q should be 4-d tensor with B, H, L, D"
       
         kernel = self.kernel_selection(self.kernel_name)
-        if self.kernel_name == "online_routing":
-            o = kernel(
-                q,
-                k,
-                v,
-                mask,
-                is_causal=is_causal,
-                skip_thresh=self.skip_thresh
-            )
-        elif self.kernel_name == "mxfp_attn":
+        if self.kernel_name == "mxfp_attn":
             # def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, 
             #     is_causal=False, scale=None, smooth_k=False, attention_sink=False, tensor_layout="HND",
             #     output_dtype=torch.float16, return_sparsity=False, block_scale_type="mxfp4", skip_thresh=None):
@@ -118,16 +92,6 @@ class MXFPAttention(nn.Module):
                 quant_granularity=self.quant_granularity,
                 qk_dtype=self.qk_dtype,
                 # skip_thresh=self.skip_thresh,
-            )
-        elif self.kernel_name == "mxfp_attn_debug":
-            o = kernel(
-                q,
-                k,
-                v,
-                is_causal=is_causal,
-                output_dtype=output_dtype,
-                block_scale_type=self.mxfp_bw,
-                smooth_k=self.smooth_k,
             )
         elif self.kernel_name == "native":
             o = kernel(

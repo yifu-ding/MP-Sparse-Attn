@@ -1,10 +1,10 @@
 import sys
 import os
 
-# 计算项目根路径（假设项目结构：MP-Sparse-Attn/evaluate/llama/llama_main.py）
+# compute project root path (assuming project layout: MP-Sparse-Attn/evaluate/llama/llama_main.py)
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 
-# 确保项目根目录在 sys.path 最前面，优先导入
+# ensure project root is first in sys.path for prioritized imports
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
     
@@ -48,12 +48,12 @@ def main():
     seed_everything(42)
     parser = argparse.ArgumentParser(description='Llama model parameters')
     
-    # 模型相关参数
+    # model-related arguments
     parser.add_argument('--model', type=str, default=None)
     parser.add_argument('--device', type=str, default='cuda',
                       help='running device (cuda/cpu)')
     
-    # 稀疏注意力相关参数  
+    # sparse-attention-related arguments  
     parser.add_argument('--tune', action='store_true', help="whether to tune")
     parser.add_argument('--verbose', action='store_true', help="whether to print verbose")
     parser.add_argument('--l1', type=float, default=0.06, help='l1 bound for qk sparse')
@@ -91,7 +91,7 @@ def main():
     parser.add_argument('--sink_tile', type=int, default=1, help="sink tile")
     parser.add_argument('--qk_dtype', type=str, default='e5m2', help="qk dtype")
 
-    # 解析参数
+    # parse arguments
     args = parser.parse_args()
     assert args.compute_accuracy or args.test_speedup or args.get_pred, "must choose one of compute_accuracy or test_speedup or get_pred"
 
@@ -176,13 +176,13 @@ def main():
         if args.tune:
             os.environ["TUNE_MODE"] = "1"  # enable tune mode
 
-            # 设置稀疏注意力并进行tune
+            # set sparse attention and run tuning
             set_spas_sage_attn_llama(model, verbose=args.verbose, l1=args.l1, pv_l1=args.pv_l1, kernel_name=args.kernel_name)
             print("replace sparse attention and start tune!")
             
             # tune_dataset = "qasper"
             for tune_dataset in tqdm(datasets, desc="Tuning datasets"):
-                # 准备一些示例数据进行tune
+                # prepare sample data for tuning
                 tune_data = load_dataset(
                     "THUDM/LongBench",
                     tune_dataset,
@@ -190,11 +190,11 @@ def main():
                     trust_remote_code=True
                 )
                 
-                # 进行tune
+                # run tuning
                 prompt_format = dataset2prompt[tune_dataset]
                 max_gen = dataset2maxlen[tune_dataset]
                 # print("start to tune...")
-                for json_obj in tqdm(list(tune_data)[:5], desc="Samples"):  # 每个数据集 n 个 作为 tune sample
+                for json_obj in tqdm(list(tune_data)[:5], desc="Samples"):  # n samples per dataset as tuning samples
                     prompt = prompt_format.format(**json_obj)
                     
                     tokenized_prompt = tokenizer(prompt, truncation=False, return_tensors="pt").input_ids[0]
@@ -220,7 +220,7 @@ def main():
                             max_new_tokens=1,
                             num_beams=1,
                             do_sample=False,
-                            top_p=None,  # 显式设置 top_p 为 None
+                            top_p=None,  # explicitly set top_p to None
                             temperature=1.0,
                             min_length=context_length+1,
                             pad_token_id=tokenizer.eos_token_id,
@@ -231,23 +231,23 @@ def main():
                             **input,
                             max_new_tokens=1,  # no need to generate tokens
                             num_beams=1,
-                            top_p=None,  # 显式设置 top_p 为 None   
+                            top_p=None,  # explicitly set top_p to None   
                             do_sample=False,
                             temperature=1.0,
                             pad_token_id=tokenizer.eos_token_id,
                         )
 
-                    # 清理内存
+                    # clean up memory
                     del output
                     gc.collect()
                     torch.cuda.empty_cache()
             
-            # 保存tune后的state_dict
+            # save tuned state_dict
             saved_state_dict = extract_sparse_attention_state_dict(model)
             torch.save(saved_state_dict, model_out_path)
             print(f"Tune completed, model state dict saved to: {model_out_path}")
         else:
-            # 加载之前保存的state_dict
+            # load previously saved state_dict
             if os.path.exists(model_out_path):
                 saved_state_dict = torch.load(model_out_path)
                 set_spas_sage_attn_llama(model, verbose=args.verbose, l1=args.l1, pv_l1=args.pv_l1, kernel_name=args.kernel_name)
@@ -275,7 +275,7 @@ def main():
         raise ValueError(f"Unknown kernel name: {args.kernel_name}")
         
         
-    model.eval()  # 设置为评估模式
+    model.eval()  # set evaluation mode
     os.environ["TUNE_MODE"] = "0"  # disable tune mode
     world_size = torch.cuda.device_count()
     # mp.set_start_method('spawn', force=True)

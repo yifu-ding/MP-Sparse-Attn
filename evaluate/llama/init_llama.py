@@ -17,12 +17,12 @@ def resolve_snapshot(model_id):
 
 def init_llama_model(model_path="", device="cuda"):
     """
-    初始化Llama模型
+    Initialize the Llama model
     Args:
-        model_path: 本地模型路径
+        model_path: local model path
     Returns:
-        model: 加载的模型   
-        tokenizer: 对应的分词器
+        model: loaded model   
+        tokenizer: corresponding tokenizer
     """
     
     # model_path = resolve_snapshot(model_path)
@@ -34,21 +34,21 @@ def init_llama_model(model_path="", device="cuda"):
     # model = model.bfloat16()
     # model.eval()
 
-    # 加载 tokenizer
+    # load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, local_files_only=False)
 
-    # 初始化空模型结构（不会占用内存）
+    # initialize an empty model structure (no memory allocation)
     if '70b' in model_path:
-        with init_empty_weights():  # 70b 用 empty，3b 会报错
+        with init_empty_weights():  # use empty init for 70B; 3B may fail
             model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=False)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=False)
 
 
-    # 自动分配到多个 GPU（也可以手动设置 device_map）
+    # automatically shard across multiple GPUs (or set device_map manually)
     model = load_checkpoint_and_dispatch(
         model, model_path,
-        device_map="auto",  # 或自定义 dict: { "transformer.h.0": 0, ..., "lm_head": 1 }
+        device_map="auto",  # or custom dict: { "transformer.h.0": 0, ..., "lm_head": 1 }
         no_split_module_classes=["LlamaDecoderLayer", "Qwen2DecoderLayer"]
     )
 

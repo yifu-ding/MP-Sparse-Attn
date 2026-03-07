@@ -170,10 +170,10 @@ def mxfp_attn_kernel(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, sc
 
 
 def pad_reshape_scale_factor(q_scale, B, H, M, K, VEC_SIZE, M_padded):
-    # 扩展 q_scale 和 k_scale 的第2维度为128的倍数
+    # expand the 2nd dimension of q_scale and k_scale to a multiple of 128
     # M_padded = ((M + 127) // 128) * 128 
     # N_padded = ((N + 127) // 128) * 128 
-    # 扩展 q_scale
+    # expand q_scale
     if M_padded > M:
         q_scale_padded = torch.zeros(B, H, M_padded, K//VEC_SIZE, device=q_scale.device, dtype=q_scale.dtype)
         q_scale_padded[:, :, :M, :] = q_scale
@@ -189,21 +189,21 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
                             dual_scale=False, quant_granularity="blockwise", \
                             diag_tile=1, sink_tile=1):
     """
-    支持多维批量矩阵乘法的函数
+    function supporting multi-dimensional batched matrix multiplication
 
     Args:
-        a_desc: 形状为(B, H, M, K)的输入矩阵A  
-        a_scale: 矩阵A的scale因子, 形状为(B, H, M//128, K//VEC_SIZE//4, 32, 4, 4)
-        b_desc: 形状为(B, H, N, K)的输入矩阵B
-        b_scale: 矩阵B的scale因子, 形状为(B, H, N//128, K//VEC_SIZE//4, 32, 4, 4)
-        dtype_dst: 输出数据类型
+        a_desc: input matrix A with shape (B, H, M, K)  
+        a_scale: scale factors for matrix A, shape (B, H, M//128, K//VEC_SIZE//4, 32, 4, 4)
+        b_desc: input matrix B with shape (B, H, N, K)
+        b_scale: scale factors for matrix B, shape (B, H, N//128, K//VEC_SIZE//4, 32, 4, 4)
+        dtype_dst: output dtype
         B: batch size
-        H: head数量
-        M, N, K: 矩阵维度
-        configs: 配置参数
+        H: number of heads
+        M, N, K: matrix dimensions
+        configs: config parameters
 
     Returns:
-        output: 形状为(B, H, M, N)的输出矩阵
+        output: output matrix with shape (B, H, M, N)
     """
     output = torch.zeros((B, H, M, K), dtype=dtype_dst, device="cuda")
 
@@ -232,7 +232,7 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
     BLOCK_M = configs["BLOCK_SIZE_M"]
     BLOCK_N = configs["BLOCK_SIZE_N"]
 
-    # 设置三维grid: 参考_attn_fwd的grid设置 (M*N的块数, head数, batch数)
+    # set 3D grid: follow _attn_fwd (num M*N blocks, num heads, batch size)
     # grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), H, B)
     _, h_qo, qo_len, _ = a_desc.shape
     _, h_kv, kv_len, _ = b_desc.shape
@@ -248,21 +248,21 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
             a_desc, a_scale, a_scale_2, a_nvfp4, a_scale_nvfp4,
             b_desc, b_scale, b_scale_2, b_nvfp4, b_scale_nvfp4,
             v_ori, output, M, N, K,
-            # 输入矩阵A的stride: batch, head, M, K
+            # stride of input matrix A: batch, head, M, K
             a_desc.stride(0), a_desc.stride(1), a_desc.stride(2), a_desc.stride(3),
-            # 输入矩阵B的stride: batch, head, N, K
+            # stride of input matrix B: batch, head, N, K
             b_desc.stride(0), b_desc.stride(1), b_desc.stride(2), b_desc.stride(3),
-            # v_ori的stride: batch, head, N, K
+            # stride of v_ori: batch, head, N, K
             v_ori.stride(0), v_ori.stride(1), v_ori.stride(2), v_ori.stride(3),
-            # 输出矩阵的stride: batch, head, M, N
+            # stride of output matrix: batch, head, M, N
             output.stride(0), output.stride(1), output.stride(2), output.stride(3),
-            # a_scale因子的stride: batch, head, M//128, K//VEC_SIZE//4
+            # stride of a_scale factors: batch, head, M//128, K//VEC_SIZE//4
             a_scale.stride(0), a_scale.stride(1), a_scale.stride(2), a_scale.stride(3),
             a_scale_2.stride(0), a_scale_2.stride(1), a_scale_2.stride(2),
-            # b_scale因子的stride: batch, head, N//128, K//VEC_SIZE//4
+            # stride of b_scale factors: batch, head, N//128, K//VEC_SIZE//4
             b_scale.stride(0), b_scale.stride(1), b_scale.stride(2), b_scale.stride(3),
             b_scale_2.stride(0), b_scale_2.stride(1), b_scale_2.stride(2),
-            h_qo, num_kv_groups,  # head数量
+            h_qo, num_kv_groups,  # number of heads
             dtype_dst, is_causal,
             configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
             # configs["BLOCK_SIZE_K"],
@@ -276,21 +276,21 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
             a_desc, a_scale, a_scale_2, a_nvfp4, a_scale_nvfp4,
             b_desc, b_scale, b_scale_2, b_nvfp4, b_scale_nvfp4,
             v_ori, output, M, N, K,
-            # 输入矩阵A的stride: batch, head, M, K
+            # stride of input matrix A: batch, head, M, K
             a_desc.stride(0), a_desc.stride(1), a_desc.stride(2), a_desc.stride(3),
-            # 输入矩阵B的stride: batch, head, N, K
+            # stride of input matrix B: batch, head, N, K
             b_desc.stride(0), b_desc.stride(1), b_desc.stride(2), b_desc.stride(3),
-            # v_ori的stride: batch, head, N, K
+            # stride of v_ori: batch, head, N, K
             v_ori.stride(0), v_ori.stride(1), v_ori.stride(2), v_ori.stride(3),
-            # 输出矩阵的stride: batch, head, M, N
+            # stride of output matrix: batch, head, M, N
             output.stride(0), output.stride(1), output.stride(2), output.stride(3),
-            # a_scale因子的stride: batch, head, M//128, K//VEC_SIZE//4
+            # stride of a_scale factors: batch, head, M//128, K//VEC_SIZE//4
             a_scale.stride(0), a_scale.stride(1), a_scale.stride(2), a_scale.stride(3),
             a_scale_2.stride(0), a_scale_2.stride(1), a_scale_2.stride(2),
-            # b_scale因子的stride: batch, head, N//128, K//VEC_SIZE//4
+            # stride of b_scale factors: batch, head, N//128, K//VEC_SIZE//4
             b_scale.stride(0), b_scale.stride(1), b_scale.stride(2), b_scale.stride(3),
             b_scale_2.stride(0), b_scale_2.stride(1), b_scale_2.stride(2),
-            h_qo, num_kv_groups,  # head数量
+            h_qo, num_kv_groups,  # number of heads
             dtype_dst, is_causal,
             configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
             # configs["BLOCK_SIZE_K"],
@@ -303,21 +303,21 @@ def block_scaled_batched_attn(a_desc, a_scale, b_desc, b_scale,  \
             a_desc, a_scale, a_scale_2,
             b_desc, b_scale, b_scale_2,
             v_ori, output, M, N, K,
-            # 输入矩阵A的stride: batch, head, M, K
+            # stride of input matrix A: batch, head, M, K
             a_desc.stride(0), a_desc.stride(1), a_desc.stride(2), a_desc.stride(3),
-            # 输入矩阵B的stride: batch, head, N, K
+            # stride of input matrix B: batch, head, N, K
             b_desc.stride(0), b_desc.stride(1), b_desc.stride(2), b_desc.stride(3),
-            # v_ori的stride: batch, head, N, K
+            # stride of v_ori: batch, head, N, K
             v_ori.stride(0), v_ori.stride(1), v_ori.stride(2), v_ori.stride(3),
-            # 输出矩阵的stride: batch, head, M, N
+            # stride of output matrix: batch, head, M, N
             output.stride(0), output.stride(1), output.stride(2), output.stride(3),
-            # a_scale因子的stride: batch, head, M//128, K//VEC_SIZE//4
+            # stride of a_scale factors: batch, head, M//128, K//VEC_SIZE//4
             a_scale.stride(0), a_scale.stride(1), a_scale.stride(2), a_scale.stride(3),
             a_scale_2.stride(0), a_scale_2.stride(1), a_scale_2.stride(2),
-            # b_scale因子的stride: batch, head, N//128, K//VEC_SIZE//4
+            # stride of b_scale factors: batch, head, N//128, K//VEC_SIZE//4
             b_scale.stride(0), b_scale.stride(1), b_scale.stride(2), b_scale.stride(3),
             b_scale_2.stride(0), b_scale_2.stride(1), b_scale_2.stride(2),
-            h_qo, num_kv_groups,  # head数量
+            h_qo, num_kv_groups,  # number of heads
             dtype_dst, is_causal,
             configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
             # configs["BLOCK_SIZE_K"],

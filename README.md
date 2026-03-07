@@ -1,69 +1,63 @@
-## 命令行参数说明
+## Command-Line Argument Reference
 
-本程序命令行参数，按功能模块分组说明如下：
+This program's command-line arguments are grouped by functionality as follows:
 
+### 1. Model Configuration
 
-### 1. 模型配置
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--model` | `str` | `None` | Model path or model identifier. |
+| `--device` | `str` | `'cuda'` | Runtime device. Options: `'cuda'` or `'cpu'`. |
 
-| 参数         | 类型    | 默认值      | 说明                            |
-| ---------- | ----- | -------- | ----------------------------- |
-| `--model`  | `str` | `None`   | 模型路径或模型标识符。                   |
-| `--device` | `str` | `'cuda'` | 指定运行设备。选项：`'cuda'` 或 `'cpu'`。 |
+### 2. Sparse Attention Configuration (for the codebase baseline SpargeAttn; not used by our method)
 
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--tune` | `store_true` | `False` | Enable operator tuning. |
+| `--verbose` | `store_true` | `False` | Print verbose logs. |
+| `--l1` | `float` | `0.06` | L1-norm threshold for query-key sparse selection. |
+| `--pv_l1` | `float` | `0.065` | L1-norm threshold for product-value sparse selection. |
 
-### 2. 稀疏注意力配置（为 codebase 算法 SpargeAttn 的参数，our method 不用）
+### 3. Dataset Configuration
 
-| 参数          | 类型      | 默认值     | 说明                              |
-| ----------- | ------- | ------- | ------------------------------- |
-| `--tune`    | `store_true`  | `False` | 是否启用算子调优过程。                     |
-| `--verbose` | `store_true`  | `False` | 是否打印详细日志。                       |
-| `--l1`      | `float` | `0.06`  | 用于 query-key 稀疏选择的 L1 范数阈值。     |
-| `--pv_l1`   | `float` | `0.065` | 用于 product-value 稀疏选择的 L1 范数阈值。 |
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--e` | `store_true` | `False` | Evaluate LongBench-E (extended set). |
+| `--test_dataset_name` | `str` | `'all'` | Evaluate a single dataset (useful for debugging). Default `'all'` evaluates all LongBench datasets. |
 
+### 4. Output and Logging Configuration
 
-### 3. 数据集配置
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--output_path` | `str` | `'results'` | Output directory for results. |
+| `--model_out_path` | `str` | `''` | Path to save tuned model `state_dict` (SpargeAttn only). |
+| `--use_wandb` | `store_true` | `False` | Enable Weights & Biases logging. |
+| `--num_fewshots` | `int` | `None` | Evaluate only a specified number of few-shot samples (for debugging or quick checks). |
 
-| 参数                    | 类型     | 默认值     | 说明                                             |
-| --------------------- | ------ | ------- | ---------------------------------------------- |
-| `--e`                 | `store_true` | `False` | 是否评估 LongBench-E（扩展版）。                         |
-| `--test_dataset_name` | `str`  | `'all'` | 指定单个数据集进行测试（可用于 debug）；默认设为 `'all'`，将评估 LongBench 中的所有数据集。 |
+### 5. Evaluation Configuration
 
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--test_speedup` | `store_true` | `False` | Run inference speed benchmark only (no accuracy evaluation). |
+| `--get_pred` | `store_true` | `False` | Generate predictions. |
+| `--compute_accuracy` | `store_true` | `False` | Compute prediction accuracy. |
 
-### 4. 输出与日志配置
+> Speed-only evaluation: use `--test_speedup`.
+> Accuracy evaluation:
+> Method 1: enable both `--get_pred` and `--compute_accuracy`.
+> Method 2: run `--get_pred` first, then run `--compute_accuracy` separately.
 
-| 参数                 | 类型     | 默认值         | 说明                               |
-| ------------------ | ------ | ----------- | -------------------------------- |
-| `--output_path`    | `str`  | `'results'` | 结果输出目录。                          |
-| `--model_out_path` | `str`  | `''`        | 保存调优后模型的 `state_dict` 路径。（仅 SpargeAttn 使用）        |
-| `--use_wandb`      | `store_true` | `False`     | 是否启用 Weights & Biases 日志记录。      |
-| `--num_fewshots`   | `int`  | `None`      | 仅评估指定数量的 few-shot 样本（用于调试或快速验证）。 |
+### 6. Method Selection
 
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kernel_name` | `str` | `None` | Attention kernel type to use. Options:<br> - `online_routing`: legacy method (deprecated)<br> - `mxfp_attn`: production Triton kernel<br> - `mxfp_attn_debug`: torch+triton debug implementation for algorithm iteration and quick validation; absolute accuracy is not reliable, use relative comparisons only<br> - `native`: PyTorch native SDPA attention<br> - `spargeattn`: built-in baseline in this codebase |
+| `--mxfp_bw` | `str` | `'mxfp8'` | Bit-width setting for low-bit attention; affects quantization and compute precision. Options:<br> - `mxfp4`, `mxfp8`, `nvfp4`: single-bitwidth schemes<br> - `mxfp8_diag`: hybrid scheme using `mxfp8` on diagonal and `nvfp4` off-diagonal (under validation) |
 
-### 5. 测试配置
+### 7. Other Tricks
 
-| 参数                   | 类型     | 默认值     | 说明                        |
-| -------------------- | ------ | ------- | ------------------------- |
-| `--test_speedup`     | `store_true` | `False` | 进行推理加速测试（不评估精度）      |
-| `--get_pred`         | `store_true` | `False` | 生成预测结果  |
-| `--compute_accuracy` | `store_true` | `False` | 计算预测精度  |
-
-> ✅ **仅测试速度**：使用 `--test_speedup`
-> ✅ **测试精度**：方法 1. 同时开启 `--get_pred` 和 `--compute_accuracy`；方法 2. 可先单独开启 `--get_pred` 生成预测，再单独运行 `--compute_accuracy` 评估精度
-
-
-### 6. 方法选择
-
-| 参数           | 类型    | 默认值       | 说明          |
-| --------------- | ----- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--kernel_name` | `str` | `None`    | 指定所使用的注意力 kernel 类型。可选值：<br> - `online_routing`：旧版本方法，已废弃 <br> - `mxfp_attn`：正式版 Triton kernel <br> - `mxfp_attn_debug`：用于调试的 torch+triton 实现，仅用于算法迭代和快速验证，精度不准，只能看相对精度 <br> - `native`：PyTorch 原生 SDPA 注意力 <br> - `spargeattn`：本代码库自带 baseline，可直接运行 |
-| `--mxfp_bw`     | `str` | `'mxfp8'` | 低比特 attention 的位宽设置，影响量化与计算精度。选项包括：<br> - `mxfp4`, `mxfp8`, `nvfp4`：单一位宽方案  <br> - `mxfp8_diag`：对角线使用 mxfp8，非对角线使用 nvfp4 的混合方案（验证中）    |
-
-
-### 7. 其他 trick
-
-| 参数              | 类型      | 默认值     | 说明                                    |
-| --------------- | ------- | ------- | ------------------------------------- |
-| `--skip_thresh` | `float` | `None`  | （已废弃）旧版跳过策略阈值，当前未启用。                  |
-| `--smooth_k`    | `store_true`  | `False` | 是否启用 key 矩阵平滑（smoothing）trick。        |
-| `--dual_scale`  | `store_true`  | `False` | 是否启用双重 scale 技术（our method 中的一个优化手段）。 |
-
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--skip_thresh` | `float` | `None` | Deprecated legacy skip-strategy threshold; currently unused. |
+| `--smooth_k` | `store_true` | `False` | Enable key-matrix smoothing trick. |
+| `--dual_scale` | `store_true` | `False` | Enable dual-scale technique (an optimization used in our method). |

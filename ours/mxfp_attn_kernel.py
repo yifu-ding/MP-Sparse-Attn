@@ -50,15 +50,15 @@ def block_scaled_batched_attn_kernel(  #
         v_ori,
         o_ptr,  #
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        stride_qb, stride_qh, stride_qm, stride_qk,  # a的strides: batch, head, M, K
-        stride_kb, stride_kh, stride_kn, stride_kk,  # b的strides: batch, head, N, K
-        stride_vb, stride_vh, stride_vn, stride_vk,  # v_ori的strides: batch, head, N, K
-        stride_ob, stride_oh, stride_om, stride_on,  # c的strides: batch, head, M, N
-        stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # q_scale的strides
-        stride_sqb_2, stride_sqh_2, stride_sqm_2,  # q_scale_2的strides
-        stride_skb, stride_skh, stride_skn, stride_skk, # k_scale的strides  # stride_skn=1024
-        stride_skb_2, stride_skh_2, stride_skn_2,  # k_scale_2的strides
-        num_h: tl.constexpr,  # head数量
+        stride_qb, stride_qh, stride_qm, stride_qk,  # strides of a: batch, head, M, K
+        stride_kb, stride_kh, stride_kn, stride_kk,  # strides of b: batch, head, N, K
+        stride_vb, stride_vh, stride_vn, stride_vk,  # strides of v_ori: batch, head, N, K
+        stride_ob, stride_oh, stride_om, stride_on,  # strides of c: batch, head, M, N
+        stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # strides of q_scale
+        stride_sqb_2, stride_sqh_2, stride_sqm_2,  # strides of q_scale_2
+        stride_skb, stride_skh, stride_skn, stride_skk, # strides of k_scale  # stride_skn=1024
+        stride_skb_2, stride_skh_2, stride_skn_2,  # strides of k_scale_2
+        num_h: tl.constexpr,  # number of heads
         num_kv_groups: tl.constexpr,
         output_type: tl.constexpr,  #
         is_causal: tl.constexpr,  #
@@ -80,18 +80,18 @@ def block_scaled_batched_attn_kernel(  #
         qk_dtype: tl.constexpr = 0,   # 0 for e5m2, 1 for e4m3
 ):  # False, qo_len = 256, kv_len = 512
 
-    start_m = tl.program_id(0)  # M*N维度的块索引
-    off_h = tl.program_id(1).to(tl.int64)  # head维度索引
-    off_z = tl.program_id(2).to(tl.int64)  # batch维度索引
+    start_m = tl.program_id(0)  # block index in the M*N dimension
+    off_h = tl.program_id(1).to(tl.int64)  # head dimension index
+    off_z = tl.program_id(2).to(tl.int64)  # batch dimension index
 
-    # 计算M和N维度的块索引
+    # compute block indices for M and N dimensions
     num_pid_m = tl.cdiv(qo_len, BLOCK_M)
     pid_m = start_m % num_pid_m
 
-    # 计算偏移量
+    # compute offsets
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_n = tl.arange(0, BLOCK_N) # 每次计算的 token 列数 # [128]
+    offs_n = tl.arange(0, BLOCK_N) # number of token columns computed per iteration # [128]
 
     offs_k_a = 0
     offs_k_b = 0
@@ -105,13 +105,13 @@ def block_scaled_batched_attn_kernel(  #
     elif output_type == 3:
         output_dtype = tl.bfloat16
 
-    # block scale offsets - 参考_attn_fwd的offset计算方式
+    # block scale offsets - follow _attn_fwd offset computation
     offs_sm = (pid_m * (BLOCK_M // WARP_SIZE_M) + tl.arange(0, BLOCK_M // WARP_SIZE_M)) % qo_len  # [1] when pid_m==1
     offs_sn = tl.arange(0, BLOCK_N // WARP_SIZE_N) % kv_len 
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
-    # 计算当前batch和head的基地址
+    # compute base address for current batch and head
     q_base_offset = off_z * stride_qb + off_h * stride_qh
     k_base_offset = off_z * stride_kb + off_h * stride_kh
     v_base_offset = off_z * stride_vb + off_h * stride_vh
@@ -150,7 +150,7 @@ def block_scaled_batched_attn_kernel(  #
             scale_q_2 = tl.load(q_scale_2_ptr)
 
 
-    # 简化scale load，使用2D模式
+    # simplify scale loading with 2D mode
     if USE_2D_SCALE_LOAD:
         offs_inner = tl.arange(0, (HEAD_DIM // VEC_SIZE // 4) * 32 * 4 * 4)
         q_scale_ptr = q_scale + q_scale_base_offset + offs_sm[:, None] * stride_sqm + offs_inner[None, :] 
@@ -190,7 +190,7 @@ def block_scaled_batched_attn_kernel(  #
     # if mp_diag:    
     #     scale_q_nvfp4 = scale_q_nvfp4.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // 16)  # [128, 8]
 
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # 初始化为1
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # initialize to 1
     old_m = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
 
     # k_ptrs = k_ptr + k_base_offset + (offs_n[None, :] * stride_kn + off_k[:, None]) 
@@ -198,12 +198,12 @@ def block_scaled_batched_attn_kernel(  #
     v_ptrs = v_ori + v_base_offset + (offs_n[:, None] * stride_vn + off_v[None, :]) 
     
     if is_causal:
-        # 因果注意力第一阶段
+        # causal attention stage 1
         lo, hi = 0, start_m * BLOCK_M
 
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -240,11 +240,11 @@ def block_scaled_batched_attn_kernel(  #
             if dual_scale: qk = qk * (scale_q_2 * scale_k_2)
             # saved_qk = qk
             
-            # 因果注意力第一阶段计算
+            # causal attention stage 1 computation
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
             mask_sum = tl.sum(tl.sum(mask, axis=0))
             if True:
-            # if mask_sum > 0:   # 好像是对的，但收益不多
+            # if mask_sum > 0:   # seems correct, but gains are limited
                 local_m = tl.max(qk, 1)  # [128]
                 new_m = tl.maximum(old_m, local_m)
                 qk = qk - new_m[:, None]
@@ -273,14 +273,14 @@ def block_scaled_batched_attn_kernel(  #
                     elif quant_granularity == 2:
                         k_scale_2_ptr += BLOCK_N
 
-        # 因果注意力第二阶段
+        # causal attention stage 2
         saved_qk = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
         lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
         lo = tl.multiple_of(lo, BLOCK_M)
 
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -321,7 +321,7 @@ def block_scaled_batched_attn_kernel(  #
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
             # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
-            # 因果注意力第二阶段计算
+            # causal attention stage 2 computation
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk + tl.where(mask, 0, -1.0e6)
             local_m = tl.max(qk, 1)
@@ -357,7 +357,7 @@ def block_scaled_batched_attn_kernel(  #
         lo, hi = 0, kv_len
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -382,7 +382,7 @@ def block_scaled_batched_attn_kernel(  #
 
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
 
-            # 非因果注意力计算
+            # non-causal attention computation
             qk = qk.to(tl.float32)
             local_m = tl.max(qk, 1) 
             new_m = tl.maximum(old_m, local_m)
@@ -428,15 +428,15 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
         v_ori,
         o_ptr,  #
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        stride_qb, stride_qh, stride_qm, stride_qk,  # a的strides: batch, head, M, K
-        stride_kb, stride_kh, stride_kn, stride_kk,  # b的strides: batch, head, N, K
-        stride_vb, stride_vh, stride_vn, stride_vk,  # v_ori的strides: batch, head, N, K
-        stride_ob, stride_oh, stride_om, stride_on,  # c的strides: batch, head, M, N
-        stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # q_scale的strides
-        stride_sqb_2, stride_sqh_2, stride_sqm_2,  # q_scale_2的strides
-        stride_skb, stride_skh, stride_skn, stride_skk, # k_scale的strides  # stride_skn=1024
-        stride_skb_2, stride_skh_2, stride_skn_2,  # k_scale_2的strides
-        num_h: tl.constexpr,  # head数量
+        stride_qb, stride_qh, stride_qm, stride_qk,  # strides of a: batch, head, M, K
+        stride_kb, stride_kh, stride_kn, stride_kk,  # strides of b: batch, head, N, K
+        stride_vb, stride_vh, stride_vn, stride_vk,  # strides of v_ori: batch, head, N, K
+        stride_ob, stride_oh, stride_om, stride_on,  # strides of c: batch, head, M, N
+        stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # strides of q_scale
+        stride_sqb_2, stride_sqh_2, stride_sqm_2,  # strides of q_scale_2
+        stride_skb, stride_skh, stride_skn, stride_skk, # strides of k_scale  # stride_skn=1024
+        stride_skb_2, stride_skh_2, stride_skn_2,  # strides of k_scale_2
+        num_h: tl.constexpr,  # number of heads
         num_kv_groups: tl.constexpr,
         output_type: tl.constexpr,  #
         is_causal: tl.constexpr,  #
@@ -459,18 +459,18 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
         qk_dtype: tl.constexpr = 0,   # 0 for e5m2, 1 for e4m3
 ):  # False, qo_len = 256, kv_len = 512
 
-    start_m = tl.program_id(0)  # M*N维度的块索引
-    off_h = tl.program_id(1).to(tl.int64)  # head维度索引
-    off_z = tl.program_id(2).to(tl.int64)  # batch维度索引
+    start_m = tl.program_id(0)  # block index in the M*N dimension
+    off_h = tl.program_id(1).to(tl.int64)  # head dimension index
+    off_z = tl.program_id(2).to(tl.int64)  # batch dimension index
 
-    # 计算M和N维度的块索引
+    # compute block indices for M and N dimensions
     num_pid_m = tl.cdiv(qo_len, BLOCK_M)
     pid_m = start_m % num_pid_m
 
-    # 计算偏移量
+    # compute offsets
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_n = tl.arange(0, BLOCK_N) # 每次计算的 token 列数 # [128]
+    offs_n = tl.arange(0, BLOCK_N) # number of token columns computed per iteration # [128]
 
     offs_k_a = 0
     offs_k_b = 0
@@ -484,13 +484,13 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
     elif output_type == 3:
         output_dtype = tl.bfloat16
 
-    # block scale offsets - 参考_attn_fwd的offset计算方式
+    # block scale offsets - follow _attn_fwd offset computation
     offs_sm = (pid_m * (BLOCK_M // WARP_SIZE_M) + tl.arange(0, BLOCK_M // WARP_SIZE_M)) % qo_len  # [1] when pid_m==1
     offs_sn = tl.arange(0, BLOCK_N // WARP_SIZE_N) % kv_len 
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
-    # 计算当前batch和head的基地址
+    # compute base address for current batch and head
     q_base_offset = off_z * stride_qb + off_h * stride_qh
     k_base_offset = off_z * stride_kb + off_h * stride_kh
     v_base_offset = off_z * stride_vb + off_h * stride_vh
@@ -530,7 +530,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
             k_scale_2_ptr = k_scale_2 + k_scale_2_offset
             scale_q_2 = tl.load(q_scale_2_ptr)
 
-    # 简化scale load，使用2D模式
+    # simplify scale loading with 2D mode
     # if USE_2D_SCALE_LOAD:
     offs_inner = tl.arange(0, (HEAD_DIM // VEC_SIZE // 4) * 32 * 4 * 4)
     q_scale_ptr = q_scale + q_scale_base_offset + offs_sm[:, None] * stride_sqm + offs_inner[None, :] 
@@ -570,7 +570,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
     scale_q = scale_q.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // VEC_SIZE)  # [128, 8]
     scale_q_nvfp4 = scale_q_nvfp4.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // 16)  # [128, 8]
 
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # 初始化为1
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # initialize to 1
     old_m = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
 
     # k_ptrs = k_ptr + k_base_offset + (offs_n[None, :] * stride_kn + off_k[:, None]) 
@@ -582,7 +582,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
     if is_causal:
         lo, hi = 0, sink_tile * BLOCK_M
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -630,18 +630,18 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
                     k_scale_2_ptr += BLOCK_N
 
 
-        # 因果注意力第一阶段
+        # causal attention stage 1
         k_ptrs_nvfp4 += BLOCK_N * (stride_kn//2) * sink_tile # * BLOCK_M//BLOCK_N
         k_scale_nvfp4_ptr += (HEAD_DIM // 16 // 4) * stride_skk * sink_tile
         
-        # 因果注意力第一阶段
+        # causal attention stage 1
         lo, hi = sink_tile * BLOCK_M, (start_m+1-diag_tile) * BLOCK_M
         hi = sink_tile * BLOCK_M if hi < sink_tile * BLOCK_M else hi
         lo = hi if lo > hi else lo
 
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -657,7 +657,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
            
             if dual_scale: qk = qk * scale_q_2 * scale_k_2
             
-            # 因果注意力第一阶段计算
+            # causal attention stage 1 computation
             # mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
             # mask_sum = tl.sum(tl.sum(mask, axis=0))  # no need, already use lower triangular
             local_m = tl.max(qk, 1)  # [128]
@@ -685,7 +685,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
                 elif quant_granularity == 2:
                     k_scale_2_ptr += BLOCK_N
 
-        # 因果注意力第二阶段
+        # causal attention stage 2
         k_ptrs += BLOCK_N * stride_kn * (hi//BLOCK_N - sink_tile)
         k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk * (hi//BLOCK_N - sink_tile)
         # k_ptrs += BLOCK_N * stride_kn * (hi//BLOCK_M)
@@ -699,7 +699,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
         
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -722,7 +722,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
 
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
 
-            # 因果注意力第二阶段计算
+            # causal attention stage 2 computation
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk + tl.where(mask, 0, -1.0e6)
             local_m = tl.max(qk, 1)
@@ -758,7 +758,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
         lo, hi = 0, kv_len
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -784,7 +784,7 @@ def block_scaled_batched_attn_kernel_mp_diag_pre_quant(  #
 
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
 
-            # 非因果注意力计算
+            # non-causal attention computation
             qk = qk.to(tl.float32)
             local_m = tl.max(qk, 1) 
             new_m = tl.maximum(old_m, local_m)
@@ -835,15 +835,15 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
         v_ori,
         o_ptr,  #
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        stride_qb, stride_qh, stride_qm, stride_qk,  # a的strides: batch, head, M, K
-        stride_kb, stride_kh, stride_kn, stride_kk,  # b的strides: batch, head, N, K
-        stride_vb, stride_vh, stride_vn, stride_vk,  # v_ori的strides: batch, head, N, K
-        stride_ob, stride_oh, stride_om, stride_on,  # c的strides: batch, head, M, N
-        stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # q_scale的strides
-        stride_sqb_2, stride_sqh_2, stride_sqm_2,  # q_scale_2的strides
-        stride_skb, stride_skh, stride_skn, stride_skk, # k_scale的strides  # stride_skn=1024
-        stride_skb_2, stride_skh_2, stride_skn_2,  # k_scale_2的strides
-        num_h: tl.constexpr,  # head数量
+        stride_qb, stride_qh, stride_qm, stride_qk,  # strides of a: batch, head, M, K
+        stride_kb, stride_kh, stride_kn, stride_kk,  # strides of b: batch, head, N, K
+        stride_vb, stride_vh, stride_vn, stride_vk,  # strides of v_ori: batch, head, N, K
+        stride_ob, stride_oh, stride_om, stride_on,  # strides of c: batch, head, M, N
+        stride_sqb, stride_sqh, stride_sqm, stride_sqk,  # strides of q_scale
+        stride_sqb_2, stride_sqh_2, stride_sqm_2,  # strides of q_scale_2
+        stride_skb, stride_skh, stride_skn, stride_skk, # strides of k_scale  # stride_skn=1024
+        stride_skb_2, stride_skh_2, stride_skn_2,  # strides of k_scale_2
+        num_h: tl.constexpr,  # number of heads
         num_kv_groups: tl.constexpr,
         output_type: tl.constexpr,  #
         is_causal: tl.constexpr,  #
@@ -865,18 +865,18 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
         qk_dtype: tl.constexpr = 0,   # 0 for e5m2, 1 for e4m3
 ):  # False, qo_len = 256, kv_len = 512
 
-    start_m = tl.program_id(0)  # M*N维度的块索引
-    off_h = tl.program_id(1).to(tl.int64)  # head维度索引
-    off_z = tl.program_id(2).to(tl.int64)  # batch维度索引
+    start_m = tl.program_id(0)  # block index in the M*N dimension
+    off_h = tl.program_id(1).to(tl.int64)  # head dimension index
+    off_z = tl.program_id(2).to(tl.int64)  # batch dimension index
 
-    # 计算M和N维度的块索引
+    # compute block indices for M and N dimensions
     num_pid_m = tl.cdiv(qo_len, BLOCK_M)
     pid_m = start_m % num_pid_m
 
-    # 计算偏移量
+    # compute offsets
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     # offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_n = tl.arange(0, BLOCK_N) # 每次计算的 token 列数 # [128]
+    offs_n = tl.arange(0, BLOCK_N) # number of token columns computed per iteration # [128]
 
     offs_k_a = 0
     offs_k_b = 0
@@ -890,13 +890,13 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
     elif output_type == 3:
         output_dtype = tl.bfloat16
 
-    # block scale offsets - 参考_attn_fwd的offset计算方式
+    # block scale offsets - follow _attn_fwd offset computation
     offs_sm = (pid_m * (BLOCK_M // WARP_SIZE_M) + tl.arange(0, BLOCK_M // WARP_SIZE_M)) % qo_len  # [1] when pid_m==1
     offs_sn = tl.arange(0, BLOCK_N // WARP_SIZE_N) % kv_len 
 
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
-    # 计算当前batch和head的基地址
+    # compute base address for current batch and head
     q_base_offset = off_z * stride_qb + off_h * stride_qh
     k_base_offset = off_z * stride_kb + off_h * stride_kh
     v_base_offset = off_z * stride_vb + off_h * stride_vh
@@ -964,7 +964,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
     scale_q = scale_q.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // VEC_SIZE)  # [128, 8]
     scale_q_nvfp4 = scale_q_nvfp4.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, HEAD_DIM // 16)  # [128, 8]
 
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # 初始化为1
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0 # initialize to 1
     old_m = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
 
     # k_ptrs = k_ptr + k_base_offset + (offs_n[None, :] * stride_kn + off_k[:, None]) 
@@ -976,7 +976,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
     if is_causal:
         lo, hi = 0, sink_tile * BLOCK_M
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -1024,18 +1024,18 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
                 elif quant_granularity == 2: k_scale_2_ptr += BLOCK_N
 
 
-        # 因果注意力第一阶段
+        # causal attention stage 1
         k_ptrs_nvfp4 += BLOCK_N * (stride_kn//2) * sink_tile # * BLOCK_M//BLOCK_N
         k_scale_nvfp4_ptr += (HEAD_DIM // 16 // 4) * stride_skk * sink_tile
         
-        # 因果注意力第一阶段
+        # causal attention stage 1
         lo, hi = sink_tile * BLOCK_M, (start_m) * BLOCK_M
         hi = sink_tile * BLOCK_M if hi < sink_tile * BLOCK_M else hi
         lo = hi if lo > hi else lo
 
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -1053,7 +1053,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
            
             if dual_scale: qk = qk * (scale_q_2 * scale_k_2)
             
-            # 因果注意力第一阶段计算
+            # causal attention stage 1 computation
             # mask = offs_m[:, None] >= (start_n + offs_n[None, :])   
             # mask_sum = tl.sum(tl.sum(mask, axis=0))  # no need, already use lower triangular
             local_m = tl.max(qk, 1)  # [128]
@@ -1081,7 +1081,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
                 elif quant_granularity == 2:
                     k_scale_2_ptr += BLOCK_N
 
-        # 因果注意力第二阶段
+        # causal attention stage 2
         k_ptrs += BLOCK_N * stride_kn * (hi//BLOCK_N - sink_tile)
         k_scale_ptr += (HEAD_DIM // VEC_SIZE // 4) * stride_skk * (hi//BLOCK_N - sink_tile)
         # k_ptrs += BLOCK_N * stride_kn * (hi//BLOCK_M)
@@ -1095,7 +1095,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
         
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
  
@@ -1117,7 +1117,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
             # qk = tl.where(offs_m[:, None] < qo_len, qk, -float("inf"))
 
-            # 因果注意力第二阶段计算
+            # causal attention stage 2 computation
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk + tl.where(mask, 0, -1.0e6)
             local_m = tl.max(qk, 1)
@@ -1151,7 +1151,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
         lo, hi = 0, kv_len
         for start_n in tl.range(lo, hi, BLOCK_N, num_stages=NUM_STAGES):
 
-            # 计算当前块的有效范围
+            # compute valid range for current block
             curr_n_range = start_n + offs_n
             n_mask = curr_n_range < kv_len
 
@@ -1180,7 +1180,7 @@ def block_scaled_batched_attn_kernel_mp_sink_pre_quant(  #
 
             qk = tl.where(n_mask[None, :], qk, -float("inf"))
 
-            # 非因果注意力计算
+            # non-causal attention computation
             qk = qk.to(tl.float32)
             local_m = tl.max(qk, 1) 
             new_m = tl.maximum(old_m, local_m)

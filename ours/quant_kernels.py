@@ -41,11 +41,11 @@ def quant_fpxint8_kernel(Input, Output, Scale, L,
     x = x.to(tl.float32)
     x *= sm_scale
 
-    # 每32个元素共享一个scale
+    # each 32 elements share one scale
     x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]
     scales = tl.max(tl.abs(x_reshaped), axis=-1) / 127.  # scales: [BLKQ (128), headdim // 32, 1]
     scales = scales + 0.0000001
-    # scale 要符合 x_reshaped 的形状？
+    # should scale match x_reshaped shape?
     scales_broadcast = tl.broadcast_to(tl.reshape(scales, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_reshaped = x_reshaped / scales_broadcast
     x_reshaped += 0.5 * tl.where(x_reshaped >= 0, 1, -1)
@@ -53,7 +53,7 @@ def quant_fpxint8_kernel(Input, Output, Scale, L,
     x_int8 = tl.reshape(x_reshaped, x.shape)
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
 
-    # 存储每32个元素的scale
+    # store scale for every 32 elements
     scales = scales.to(tl.float8e5)
     tl.store(scale_ptrs, scales, mask=offs_n[:, None] < L)
 
@@ -118,7 +118,7 @@ def quant_mxfp8_kernel(Input, Output, Scale, Scale_q, L,
     x_reshaped = tl.reshape(x, (BLK, C // 32, 32))   # x_reshaped: [BLKQ (128), headdim // 32, 32]  --> [BLKQ, 4, 32]
     abs_max = tl.max(tl.abs(x_reshaped), axis=-1)  # abs_max shape: [BLK, C//32] --> [BLKQ, 4]
     
-    # 对于float8，emax_elem = 7 for e4m3, 15 for e4m2
+    # for float8, emax_elem = 7 for e4m3 and 15 for e4m2
     emax_elem = 7 if qk_dtype == 1 else 15
     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem 
     shared_scale = tl.exp2(shared_exp) 
@@ -126,16 +126,16 @@ def quant_mxfp8_kernel(Input, Output, Scale, Scale_q, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # x_quant = tl.clamp(x_quant, -57344, 57344)  # e4m2 range
     x_quant = tl.clamp(x_quant, -448, 448) if qk_dtype == 1 else tl.clamp(x_quant, -57344, 57344) 
     x_quant = x_quant.to(tl.float8e4nv) if qk_dtype == 1 else x_quant.to(tl.float8e5)
     
-    # 存储量化后的值和scale
+    # store quantized values and scale
     x_fp8 = tl.reshape(x_quant, x.shape)
     tl.store(output_ptrs, x_fp8, mask=offs_n[:, None] < L)
     
-    # 存储scale
+    # store scale
     # is_invalid = torch.isnan(shared_scale) | torch.isinf(shared_scale) | (shared_scale <= 0)
     # tl.store(scale_ptrs, 255, mask = ~is_invalid)
     # valid_values = shared_scale[~is_invalid]
@@ -215,22 +215,22 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 16, 1)), (BLK, C // 16, 16))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4     x = x / ss = x / (abs_max / 6) = x * 6 / abs_max
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # float4 (e2m1) range: [-6, 6]
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # float4 (e2m1) 的量化实现
-    # 1. 获取符号位
+    # float4 (e2m1) quantization implementation
+    # 1. get sign bit
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
-    # 2. 获取指数位 (2位)
+    # 2. get exponent bits (2 bits)
     exp = tl.where(abs_x >= 2.0, 
                   tl.where(abs_x >= 4.0, 3, 2),
                   tl.where(abs_x >= 1.0, 1, 0))
-    # 3. 获取尾数位 (1位)
+    # 3. get mantissa bit (1 bit)
     bias = 1.0
-    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # 首先将数值规范化到[1,2)区间
-    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
-    # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在int8里
+    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # first normalize values into the [1, 2) range
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # tie-breaking prefers even mantissa
+    # 4. pack into float4 (sign:1, exp:2, mantissa:1), stored in int8
     x_quant = (sign << 3) | (exp << 1) | mantissa
     
     # 5. pack and store x_quant
@@ -258,7 +258,7 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     abs_max = tl.max(tl.abs(abs_max), axis=-1)  # abs_max shape: [BLK, C//32] --> [BLKQ, 4]
     # abs_max = tl.max(tl.abs(x_reshaped), axis=-1) 
 
-    # 对于float8，emax_elem = 7 for e4m3, 15 for e5m2
+    # for float8, emax_elem = 7 for e4m3 and 15 for e5m2
     emax_elem = 7 if qk_dtype == 1 else 15
     shared_exp = tl.floor(tl.log2(abs_max)) - emax_elem 
     shared_scale = tl.exp2(shared_exp) 
@@ -266,16 +266,16 @@ def quant_mxfp8_nvfp4_kernel(Input, Output_fp8, Output_fp4, Scale_fp8, Scale_fp4
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # x_quant = tl.clamp(x_quant, -57344, 57344)  # e5m2 range
     x_quant = tl.clamp(x_quant, -448, 448) if qk_dtype == 1 else tl.clamp(x_quant, -57344, 57344)  # e4m3 range
     x_quant = x_quant.to(tl.float8e4nv) if qk_dtype == 1 else x_quant.to(tl.float8e5)
     
-    # 存储量化后的值和scale
+    # store quantized values and scale
     x_fp8 = tl.reshape(x_quant, x.shape)
     tl.store(output_ptrs, x_fp8, mask=offs_n[:, None] < L)
     
-    # 存储scale
+    # store scale
     e = tl.floor(tl.log2(shared_scale))
     e_biased = e + 127
     e_biased_clamped = tl.clamp(e_biased, 0, 254)
@@ -341,22 +341,22 @@ def quant_mxfp4_kernel(Input, Output, Scale, Scale_2, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 32, 1)), (BLK, C // 32, 32))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # float4 (e2m1) range: [-6, 6]
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # float4 (e2m1) 的量化实现
-    # 1. 获取符号位
+    # float4 (e2m1) quantization implementation
+    # 1. get sign bit
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
-    # 2. 获取指数位 (2位)
+    # 2. get exponent bits (2 bits)
     exp = tl.where(abs_x >= 2.0, 
                   tl.where(abs_x >= 4.0, 3, 2),
                   tl.where(abs_x >= 1.0, 1, 0))
-    # 3. 获取尾数位 (1位)
+    # 3. get mantissa bit (1 bit)
     bias = 1.0
-    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # 首先将数值规范化到[1,2)区间
-    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
-    # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在int8里
+    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # first normalize values into the [1, 2) range
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # tie-breaking prefers even mantissa
+    # 4. pack into float4 (sign:1, exp:2, mantissa:1), stored in int8
     x_quant = (sign << 3) | (exp << 1) | mantissa
     
     # 5. pack and store x_quant
@@ -444,22 +444,22 @@ def quant_mxfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK//32, 1, C)), (BLK//32, 32, C))  # 4, 32, 128
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # float4 (e2m1) range: [-6, 6]
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # float4 (e2m1) 的量化实现
-    # 1. 获取符号位
+    # float4 (e2m1) quantization implementation
+    # 1. get sign bit
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
-    # 2. 获取指数位 (2位)
+    # 2. get exponent bits (2 bits)
     exp = tl.where(abs_x >= 2.0, 
                   tl.where(abs_x >= 4.0, 3, 2),
                   tl.where(abs_x >= 1.0, 1, 0))
-    # 3. 获取尾数位 (1位)
+    # 3. get mantissa bit (1 bit)
     bias = 1.0
-    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # 首先将数值规范化到[1,2)区间
-    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
-    # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在int8里
+    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # first normalize values into the [1, 2) range
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # tie-breaking prefers even mantissa
+    # 4. pack into float4 (sign:1, exp:2, mantissa:1), stored in int8
     x_quant = (sign << 3) | (exp << 1) | mantissa
     
     # 5. pack and store x_quant
@@ -551,22 +551,22 @@ def quant_nvfp4_kernel(Input, Output, Scale, Scale_2, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK, C // 16, 1)), (BLK, C // 16, 16))
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4     x = x / ss = x / (abs_max / 6) = x * 6 / abs_max
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # float4 (e2m1) range: [-6, 6]
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # float4 (e2m1) 的量化实现
-    # 1. 获取符号位
+    # float4 (e2m1) quantization implementation
+    # 1. get sign bit
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
-    # 2. 获取指数位 (2位)
+    # 2. get exponent bits (2 bits)
     exp = tl.where(abs_x >= 2.0, 
                   tl.where(abs_x >= 4.0, 3, 2),
                   tl.where(abs_x >= 1.0, 1, 0))
-    # 3. 获取尾数位 (1位)
+    # 3. get mantissa bit (1 bit)
     bias = 1.0
-    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # 首先将数值规范化到[1,2)区间
-    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
-    # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在int8里
+    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # first normalize values into the [1, 2) range
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # tie-breaking prefers even mantissa
+    # 4. pack into float4 (sign:1, exp:2, mantissa:1), stored in int8
     x_quant = (sign << 3) | (exp << 1) | mantissa
     
     # 5. pack and store x_quant
@@ -686,22 +686,22 @@ def quant_nvfp4_per_channel_kernel(Input, Output, Scale, Scale_2, L,
     shared_scale_broadcast = tl.broadcast_to(tl.reshape(shared_scale, (BLK//16, 1, C)), (BLK//16, 16, C))  # 4, 32, 128
     x_quant = x_reshaped / shared_scale_broadcast  # x/e-4 = x * e4
     
-    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # 浮点数的四舍五入
+    # x_quant += 0.5 * tl.where(x_quant >= 0, 1, -1)  # floating-point rounding
     # float4 (e2m1) range: [-6, 6]
     x_quant = tl.clamp(x_quant, -6.0, 6.0)
-    # float4 (e2m1) 的量化实现
-    # 1. 获取符号位
+    # float4 (e2m1) quantization implementation
+    # 1. get sign bit
     sign = tl.where(x_quant >= 0, 0, 1)
     abs_x = tl.abs(x_quant)
-    # 2. 获取指数位 (2位)
+    # 2. get exponent bits (2 bits)
     exp = tl.where(abs_x >= 2.0, 
                   tl.where(abs_x >= 4.0, 3, 2),
                   tl.where(abs_x >= 1.0, 1, 0))
-    # 3. 获取尾数位 (1位)
+    # 3. get mantissa bit (1 bit)
     bias = 1.0
-    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # 首先将数值规范化到[1,2)区间
-    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # 平局优先选择偶数尾数
-    # 4. 组合成float4 (sign:1, exp:2, mantissa:1)，存在int8里
+    norm_x = abs_x / (tl.exp2((exp-bias).to(tl.float32)))  # first normalize values into the [1, 2) range
+    mantissa = tl.where(exp == 0, tl.where(norm_x > 0.25, 1, 0), tl.where(norm_x > 1.25, 1, 0))  # tie-breaking prefers even mantissa
+    # 4. pack into float4 (sign:1, exp:2, mantissa:1), stored in int8
     x_quant = (sign << 3) | (exp << 1) | mantissa
     
     # 5. pack and store x_quant

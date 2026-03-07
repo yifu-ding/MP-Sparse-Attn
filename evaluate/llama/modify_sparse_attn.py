@@ -101,16 +101,16 @@ def set_spas_sage_attn_llama(model, l1=0.06, pv_l1=0.065, verbose=False, skip_th
                 key_states = key_states.repeat_interleave(query_states.size(-3)//key_states.size(-3), -3)
                 value_states = value_states.repeat_interleave(query_states.size(-3)//value_states.size(-3), -3)
                 
-                # # 创建保存目录
+                # # create output directory
                 # import os
                 # save_dir = "./results/saved_qkv"
                 # os.makedirs(save_dir, exist_ok=True)
 
-                # # 生成文件名
+                # # generate file name
                 # save_name = f"qkv_bsz{bsz}_qlen{q_len}_layer{self.layer_idx}.pt"
                 # save_path = os.path.join(save_dir, save_name)
 
-                # # 保存 query_states, key_states, value_states
+                # # save query_states, key_states, and value_states
                 # torch.save({
                 #     'query_states': query_states,
                 #     'key_states': key_states, 

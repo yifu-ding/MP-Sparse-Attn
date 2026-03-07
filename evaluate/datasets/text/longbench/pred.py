@@ -97,7 +97,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
                 max_new_tokens=max_gen,
                 num_beams=1,
                 do_sample=True,
-                top_p=20,  # 显式设置 top_p 为 None
+                top_p=20,  # explicitly set top_p to None
                 temperature=1.0,
                 min_length=context_length+1,
                 pad_token_id=tokenizer.eos_token_id,
@@ -108,7 +108,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
                 **input,
                 max_new_tokens=max_gen,
                 num_beams=1,
-                top_p=20,  # 显式设置 top_p 为 None   
+                top_p=20,  # explicitly set top_p to None   
                 do_sample=True,
                 temperature=1.0,
                 pad_token_id=tokenizer.eos_token_id,
@@ -159,7 +159,7 @@ def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format,
                 max_new_tokens=1,
                 num_beams=1,
                 do_sample=False,
-                top_p=None,  # 显式设置 top_p 为 None
+                top_p=None,  # explicitly set top_p to None
                 temperature=1.0,
                 min_length=context_length+1,
                 pad_token_id=tokenizer.eos_token_id,
@@ -170,7 +170,7 @@ def get_pred_speedup(model, tokenizer, data, max_length, max_gen, prompt_format,
                 **input,
                 max_new_tokens=1,
                 num_beams=1,
-                top_p=None,  # 显式设置 top_p 为 None   
+                top_p=None,  # explicitly set top_p to None   
                 do_sample=False,
                 temperature=1.0,
                 pad_token_id=tokenizer.eos_token_id,
