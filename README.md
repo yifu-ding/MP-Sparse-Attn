@@ -1,156 +1,118 @@
-# Sparge Attention
-The official implementation of [SpargeAttn](https://arxiv.org/abs/2502.18137), a universal sparse attention accelerating language, image, and video models.
+# Diagonal-Tiled Mixed-Precision Attention
 
-<div align="center"> <h2>SpargeAttn: Accurate Sparse Attention Accelerating Any Model Inference</h2> <a href="https://huggingface.co/papers/2502.18137"> <img src="https://img.shields.io/static/v1?label=Daily%20papers&message=HuggingFace&color=yellow" alt="Daily papers: HuggingFace"> </a> <a href="https://arxiv.org/abs/2502.18137"> <img src="https://img.shields.io/badge/arXiv-2502.18137-b31b1b.svg" alt="arXiv:2502.18137"> </a> </div> 
+Official implementation of **Diagonal-Tiled Mixed-Precision Attention for Efficient Low-Bit MXFP Inference** accepted by EDEG@CVPR 2026. [[Paper](https://arxiv.org/abs/2604.03950)]
 
-<div align="center">
-    <a href="https://jt-zhang.github.io/" target="_blank">Jintao Zhang</a><sup></sup> | 
-    <a href="https://xiang-cd.github.io/cv" target="_blank">Chendong Xiang</a><sup></sup> | 
-    <a href="https://github.com/jason-huang03" target="_blank">Haofeng Huang</a><sup></sup> | 
-    <a href="https://haochengxi.github.io/" target="_blank">Haocheng Xi</a><sup></sup>|
-    <a href="" target="_blank">Jia Wei</a><sup></sup> | 
-    <a href="https://ml.cs.tsinghua.edu.cn/~jun/index.shtml" target="_blank">Jun Zhu</a><sup></sup> |
-    <a href="https://ml.cs.tsinghua.edu.cn/~jianfei" target="_blank">Jianfei Chen</a><sup></sup>
-</div>
+This repository provides Triton kernels and evaluation scripts for efficient low-bit mixed-precision attention using the microscaling floating-point format. The proposed **Diagonal-Tiled Mixed-Precision Attention** method accelerates Transformer inference by combining tiling-level mixed-precision computation, kernel fusion, and hardware-aware memory optimization.
 
-<!-- Jintao Zhang, Chendong Xiang, Haofeng Huang, Haocheng Xi, Jia Wei, Jun Zhu, Jianfei Chen -->
+## Overview
 
-<br>
+Transformer-based large language models have strong performance across many real-world tasks, but their inference cost remains high due to the quadratic complexity of attention and the memory bandwidth overhead of high-precision computation.
 
-<p align="center">
-<img src="./assets/speed_comparison.png" width="81%" alt="speed comparison.">
-</p>
+This project implements a low-bit mixed-precision attention kernel based on the **MXFP** data format. The kernel is designed for next-generation GPU architectures and targets efficient LLM inference with minimal generation-quality degradation.
 
-<p align="center">
-<img src="./assets/overview.png" width="90%" alt="overview.">
-</p>
+The core idea is to perform attention computation with mixed low-bit precision at the tile level. By using a diagonal-tiled computation pattern, the kernel improves data reuse, reduces memory traffic, and enables efficient fused attention execution.
 
-## Project Updates
-- [2025-05-02]: 🎉SpargeAttn and [SageAttention2](https://github.com/thu-ml/SageAttention) are accepted by ICML 2025!
-- [2025-01-24]: 🎉[SageAttention](https://github.com/thu-ml/SageAttention) is accepted by ICLR 2025! 
+## Key Features
+
+* **Low-bit MXFP attention** for efficient Transformer inference.
+* **Diagonal-tiled mixed-precision computation** at the attention-tile level.
+* **Fused Triton kernel** implementation for reduced memory overhead.
+* **Hardware-aware optimization** for modern GPU architectures.
+* **Efficient inference** with negligible generation-quality degradation.
+* **Evaluation support** for measuring kernel speed and model-level performance.
+
+## Method
+
+Diagonal-Tiled Mixed-Precision Attention combines two forms of low-bit computation inside a fused attention kernel.
+
+The method includes:
+
+1. **MXFP-based low-bit representation**
+   Uses microscaling floating-point formats to reduce memory bandwidth and computation cost.
+
+2. **Tile-level mixed precision**
+   Applies different low-bit computation modes across attention tiles to balance efficiency and numerical stability.
+
+3. **Diagonal-tiled attention layout**
+   Organizes attention computation along diagonal tile regions to improve parallelism and memory efficiency.
+
+4. **Triton kernel fusion**
+   Fuses attention operations into a single optimized kernel to reduce intermediate memory movement.
+
+## Repository Structure
+
+```text
+.
+├── kernels/              # Triton kernels for mixed-precision attention
+├── benchmarks/           # Kernel-level benchmarking scripts
+├── eval/                 # Model-level evaluation scripts
+├── examples/             # Example usage
+├── tests/                # Correctness tests
+└── README.md
+```
+
+The exact directory structure may vary depending on the released implementation.
 
 ## Installation
-### Base environment
-+ `python>=3.9`   , `torch>=2.3.0`
-- `CUDA`:
-  + `>=12.8` for Blackwell
-  + `>=12.4` for fp8 support on Ada
-  + `>=12.3` for fp8 support on Hopper
-  + `>=12.0` for Ampere
-
-
-### Install Package
 
 ```bash
-pip install ninja   # for parallel compilation
-python setup.py install   # or pip install -e .
+git clone https://github.com/yifu-ding/MP-Sparse-Attn.git
+cd MP-Sparse-Attn
+
+conda create -n dma python=3.10
+conda activate dma
+
+pip install -r requirements.txt
 ```
 
+Recommended dependencies:
 
-## Avalible API
-- `spas_sage2_attn_meansim_cuda`: SpargeAttn based on [SageAttention2](https://github.com/thu-ml/SageAttention).
+```bash
+pip install torch triton transformers accelerate
+```
 
-- `spas_sage_attn_meansim_cuda`: SpargeAttn based on [SageAttention](https://github.com/thu-ml/SageAttention).
+## Usage
 
+Example usage:
 
-
-## Usage Examples
-## A Simple Usage Without Tuning for Any Model
 ```python
-from spas_sage_attn import spas_sage2_attn_meansim_cuda
+from dma import diagonal_tiled_attention
 
-attn_output = spas_sage2_attn_meansim_cuda(q, k, v, simthreshd1=0.6, cdfthreshd=0.98, is_causal=False)
+output = diagonal_tiled_attention(
+    q,
+    k,
+    v,
+    causal=True,
+)
 ```
 
-**You can tune `simthreshd1` and `cdfthreshd` to balance between attention accuracy (higher values) and sparsity (lower values).**  
+For benchmarking:
 
-
-### CogVideoX
-
-Tuning:  
 ```bash
-# sequential tuning
-python evaluate/cogvideo_example.py  --use_spas_sage_attn --model_out_path evaluate/models_dict/CogVideoX-2b_0.06_0.07.pt --tune
-
-# parallel tuning, this will use all gpu available on the machine 
-python evaluate/cogvideo_example.py  --use_spas_sage_attn --model_out_path evaluate/models_dict/CogVideoX-2b_0.06_0.07.pt --tune --parallel_tune
+python benchmarks/benchmark_attention.py
 ```
 
-Inference:  
+For model-level evaluation:
+
 ```bash
-# `--compile` is optional and will slow the first time inference.
-python evaluate/cogvideo_example.py  --use_spas_sage_attn --model_out_path evaluate/models_dict/CogVideoX-2b_0.06_0.07.pt --compile
+python eval/evaluate.py
 ```
 
-> **Note:**
-We provide pre-tuned hyper-parameters `CogVideoX-2b_0.06_0.07.pt` that allow running the inference script directly. However, for better performance in both speed and quality, we recommend re-tuning because the provided hyper-parameters are tuned with SpargeAttn based on SageAttention, whereas the default API is based on SageAttention2 now.
-
-> **Note:**
-`--compile` is optional and will further accelerate video generation but bring an overhead for the first video generation.
-
-### LLama
-The tuning and inference usage is similar to CogVideoX.
-
-### Supported models
-Here’s a list of the tuned models so far, go to [hugginface](https://huggingface.co/Xiang-cd/sparge-attention-model-zoo) to see all tuned ckpt. 
-Our approach is universal, and we warmly welcome contributions! Feel free to submit a pull request to support more models. 🚀
-
-| model name | example script | tuned ckpt |
-| ---- | ---- | ---- |
-| CogVideoX-2b | evaluate/cogvideo_example.py | [link](https://huggingface.co/Xiang-cd/sparge-attention-model-zoo/blob/main/cogvideox-2b/CogVideoX-2b_0.06_0.07.pt)
-| want2v-1.3B  | evaluate/wan_example.py | [link](https://huggingface.co/Xiang-cd/sparge-attention-model-zoo/tree/main/want2v-1.3B)
-| Flux  | evaluate/flux_example.py  | TBD 
-
-
-
-## Performance
-![Local Image](./assets/exp_table.png)
-> **Note:** All experiments in the above Table and our paper used SpargeAttn based on SageAttention. An updated implementation based on SageAttention2, is available now. **It further offers a 30% speedup.**
-<br>
-
-
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="./assets/more_mochi_example.png" width="55%" alt="End-to-end video generation on Mochi.">
-      <br>
-      The quality of video generation on Mochi.
-    </td>
-    <td align="center">
-      <img src="./assets/niah128k.png" width="100%" alt="End-to-end performance of NIAH.">
-      <br>
-      End-to-end performance of NIAH.
-    </td>
-  </tr>
-</table>
-
-
-<!-- <img src="./assets/visible_image.png" width="80%" alt="image generation."> -->
-
-
+Please refer to the scripts in `examples/`, `benchmarks/`, and `eval/` for detailed usage.
 
 ## Citation
-**If you use this code or find our work valuable, please cite:**
-```
-@inproceedings{zhang2025spargeattn,
-  title={Spargeattn: Accurate sparse attention accelerating any model inference},
-  author={Zhang, Jintao and Xiang, Chendong and Huang, Haofeng and Wei, Jia and Xi, Haocheng and Zhu, Jun and Chen, Jianfei},
-  booktitle={International Conference on Machine Learning (ICML)},
-  year={2025}
-}
 
-@inproceedings{zhang2025sageattention,
-  title={SageAttention: Accurate 8-Bit Attention for Plug-and-play Inference Acceleration}, 
-  author={Zhang, Jintao and Wei, Jia and Zhang, Pengle and Zhu, Jun and Chen, Jianfei},
-  booktitle={International Conference on Learning Representations (ICLR)},
-  year={2025}
-}
+If you find this repository useful, please cite our paper:
 
-@inproceedings{zhang2024sageattention2,
-  title={Sageattention2: Efficient attention with thorough outlier smoothing and per-thread int4 quantization},
-  author={Zhang, Jintao and Huang, Haofeng and Zhang, Pengle and Wei, Jia and Zhu, Jun and Chen, Jianfei},
-  booktitle={International Conference on Machine Learning (ICML)},
-  year={2025}
-}
+```bibtex
+@inproceedings{ding2026diagonal,
+  title={Diagonal-Tiled Mixed-Precision Attention for Efficient Low-Bit MXFP Inference},
+  author={Ding, Yifu and Zhang, Xinhao and Guo, Jinyang},
+  booktitle={Proceedings of the CVPR Workshop on Efficient Deep Learning for Edge Computing},
+  year={2026}
+} 
 ```
+
+## Acknowledgements
+
+This implementation is built with Triton and PyTorch. We thank the open-source community for providing efficient tools for GPU kernel development and LLM inference research. We also acknowledge prior sparse attention implementations, including [SpargeAttn](https://github.com/thu-ml/SpargeAttn) and [SparseAttention](https://github.com/kyegomez/SparseAttention), which provided useful references for attention kernel development. 
